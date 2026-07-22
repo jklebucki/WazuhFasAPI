@@ -102,11 +102,11 @@ Nie używaj `-k` w produkcyjnych konsumentach. Komputery domenowe powinny ufać 
 ## Aktualizacja i rollback
 
 `sudo ./scripts/install.sh --upgrade` najpierw wykonuje bezpieczne `git pull --ff-only` jako
-właściciel checkoutu, a potem zachowuje env, tworzy kopię poprzedniego wydania, odtwarza venv,
-waliduje import, restartuje usługę i wykonuje smoke test. Checkout z lokalnymi zmianami nie
-zostanie wdrożony. Opcja `--no-git-pull` służy kontrolowanym wdrożeniom offline. Rollback polega na
-przywróceniu wskazanego katalogu `/opt/wazuh-bootstrap-api.rollback.*`, odtworzeniu venv i
-restarcie usługi. Konfiguracja centralnego Nginx nie jest zmieniana przez ten proces.
+właściciel checkoutu, zachowuje env, zatrzymuje usługę, tworzy kopię poprzedniego wydania,
+odtwarza venv, waliduje import, restartuje usługę i wykonuje smoke test. Błąd po podmianie
+automatycznie przywraca poprzedni runtime, jednostkę systemd i wcześniejszy stan usługi.
+Checkout z lokalnymi zmianami nie zostanie wdrożony. Opcja `--no-git-pull` służy kontrolowanym
+wdrożeniom offline. Konfiguracja centralnego Nginx nie jest zmieniana przez ten proces.
 
 ## Diagnostyka
 

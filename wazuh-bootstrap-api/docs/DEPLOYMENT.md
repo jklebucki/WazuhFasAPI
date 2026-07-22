@@ -180,8 +180,18 @@ w trybie detached HEAD, nie ma upstreamu albo aktualizacja wymagałaby merge'a. 
 niepowtarzalnym wdrożeniom i przypadkowemu nadpisaniu pracy administratora.
 
 To jest pull-based deployment: jedno polecenie pobiera zatwierdzony stan gałęzi, buduje nowy
-runtime, waliduje konfigurację, restartuje usługę i wykonuje smoke test. W kontrolowanym
-wdrożeniu offline albo przy instalacji ze zweryfikowanego archiwum można pominąć synchronizację:
+runtime, zatrzymuje działającą usługę przed podmianą `/opt/wazuh-bootstrap-api`, waliduje
+konfigurację, włącza autostart, restartuje usługę i wykonuje smoke test. Poprzednie wydanie
+pozostaje w `/opt/wazuh-bootstrap-api.rollback.*`.
+
+Jeżeli po podmianie wystąpi błąd tworzenia środowiska Python, walidacji, startu lub smoke testu,
+instalator automatycznie zatrzymuje nieudane wydanie, przywraca poprzedni runtime i plik jednostki
+systemd oraz odtwarza wcześniejszy stan aktywności i autostartu. Nieudane pliki pozostają w
+`/opt/wazuh-bootstrap-api.failed.*` do analizy. Pierwsza instalacja bez wcześniejszego wydania nie
+ma źródła rollbacku i przy błędnym env pozostawia przygotowane pliki do poprawienia konfiguracji.
+
+W kontrolowanym wdrożeniu offline albo przy instalacji ze zweryfikowanego archiwum można pominąć
+synchronizację:
 
 ```bash
 sudo ./scripts/install.sh --upgrade --no-git-pull
@@ -198,4 +208,3 @@ centralnego Nginx ani Wazuh Managera.
 * 403: klient jest poza allowlistą centralnego Nginx;
 * TLS/CRL: sprawdź zaufanie do `ad-CERTSRV-CA` i dostępność CRL;
 * stale: Wazuh był chwilowo niedostępny, a odpowiedź zawiera historyczne `dataAsOf`.
-

@@ -4,6 +4,7 @@ set -Eeuo pipefail
 install_dir=/opt/wazuh-bootstrap-api
 env_file=/etc/wazuh-bootstrap-api.env
 service_name=wazuh-bootstrap-api
+unit_file=/etc/systemd/system/wazuh-bootstrap-api.service
 upgrade=false
 git_pull=true
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -115,17 +116,75 @@ id wazuh-bootstrap >/dev/null 2>&1 || useradd \
 
 stage_dir="$(mktemp -d /opt/wazuh-bootstrap-api.stage.XXXXXX)"
 backup_dir=""
-cleanup() { [[ -d "$stage_dir" ]] && rm -rf -- "$stage_dir"; }
+failed_dir=""
+unit_backup=""
+unit_replaced=false
+deployment_swapped=false
+deployment_finished=false
+service_was_active=false
+service_was_enabled=false
+
+cleanup() {
+    local exit_code=$?
+    trap - EXIT
+    set +e
+    [[ -n "$stage_dir" && -d "$stage_dir" ]] && rm -rf -- "$stage_dir"
+
+    if [[ $exit_code -ne 0 && $deployment_finished == false && $deployment_swapped == true \
+        && -n "$backup_dir" \
+        && -d "$backup_dir" ]]; then
+        echo "Deployment failed; restoring the previous application version." >&2
+        systemctl stop "$service_name" >/dev/null 2>&1 || true
+        if [[ -d "$install_dir" ]]; then
+            failed_dir="/opt/wazuh-bootstrap-api.failed.$(date +%Y%m%d%H%M%S).$$"
+            mv -- "$install_dir" "$failed_dir"
+        fi
+        mv -- "$backup_dir" "$install_dir"
+        backup_dir=""
+
+        if $unit_replaced; then
+            if [[ -n "$unit_backup" && -f "$unit_backup" ]]; then
+                cp --preserve=mode,ownership,timestamps -- "$unit_backup" "$unit_file"
+            else
+                rm -f -- "$unit_file"
+            fi
+            systemctl daemon-reload
+        fi
+        if $service_was_enabled; then
+            systemctl enable "$service_name" >/dev/null 2>&1 || true
+        else
+            systemctl disable "$service_name" >/dev/null 2>&1 || true
+        fi
+        if $service_was_active; then
+            if systemctl start "$service_name"; then
+                echo "Previous application version restored and restarted." >&2
+            else
+                echo "Previous files were restored, but the service could not be restarted." >&2
+            fi
+        fi
+        [[ -n "$failed_dir" ]] && echo "Failed release preserved at $failed_dir" >&2
+    fi
+
+    [[ -n "$unit_backup" && -f "$unit_backup" ]] && rm -f -- "$unit_backup"
+    exit "$exit_code"
+}
 trap cleanup EXIT
 tar --exclude=.git --exclude=.venv --exclude=.env --exclude=__pycache__ \
     -C "$source_dir" -cf - . | tar -C "$stage_dir" -xf -
 
 if [[ -d "$install_dir" ]]; then
+    systemctl is-active --quiet "$service_name" && service_was_active=true
+    systemctl is-enabled --quiet "$service_name" 2>/dev/null && service_was_enabled=true
+    if $service_was_active; then
+        echo "Stopping $service_name before replacing the application runtime..."
+        systemctl stop "$service_name"
+    fi
     backup_dir="/opt/wazuh-bootstrap-api.rollback.$(date +%Y%m%d%H%M%S)"
     mv -- "$install_dir" "$backup_dir"
 fi
 mv -- "$stage_dir" "$install_dir"
 stage_dir=""
+deployment_swapped=true
 chown -R root:wazuh-bootstrap "$install_dir"
 find "$install_dir" -type d -exec chmod 0750 {} +
 find "$install_dir" -type f -exec chmod 0640 {} +
@@ -146,26 +205,42 @@ else
     echo "Preserved existing $env_file."
 fi
 
+if [[ -f "$unit_file" ]]; then
+    unit_backup="$(mktemp /tmp/wazuh-bootstrap-api.service.XXXXXX)"
+    cp --preserve=mode,ownership,timestamps -- "$unit_file" "$unit_backup"
+fi
+unit_replaced=true
 install -o root -g root -m 0644 \
     "$install_dir/deploy/systemd/wazuh-bootstrap-api.service" \
-    /etc/systemd/system/wazuh-bootstrap-api.service
+    "$unit_file"
 systemctl daemon-reload
 if ! "$install_dir/.venv/bin/python" "$install_dir/scripts/validate-config.py" \
     --env-file "$env_file" --import-app; then
-    echo "Installation files are ready, but configuration is invalid." >&2
-    echo "Edit $env_file, rerun validate-config.py, then rerun this installer with --upgrade." >&2
+    if [[ -n "$backup_dir" ]]; then
+        echo "Updated release configuration is invalid; the previous release will be restored." >&2
+    else
+        echo "Installation files are ready, but configuration is invalid." >&2
+        echo "Edit $env_file, then rerun this installer with --upgrade." >&2
+    fi
     exit 2
 fi
 
-systemctl enable --now "$service_name"
-if $upgrade; then systemctl restart "$service_name"; fi
+systemctl enable "$service_name"
+if [[ -n "$backup_dir" ]]; then
+    echo "Restarting $service_name with the updated application..."
+    systemctl restart "$service_name"
+else
+    echo "Starting $service_name..."
+    systemctl start "$service_name"
+fi
 
 if ! "$install_dir/scripts/smoke-test.sh" --env-file "$env_file"; then
     echo "Service started but the smoke test failed." >&2
-    [[ -n "$backup_dir" ]] && echo "Rollback copy is available at $backup_dir" >&2
     exit 1
 fi
+deployment_finished=true
 
 echo "Wazuh Bootstrap API installed successfully."
+[[ -n "$backup_dir" ]] && echo "Previous release retained at $backup_dir"
 echo "Central proxy endpoint: https://wazuh.ad.citronex.pl:8443"
 echo "Verify that host firewall permits TCP/8765 only from 192.168.21.17."

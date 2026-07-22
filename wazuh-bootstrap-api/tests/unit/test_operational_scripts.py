@@ -16,6 +16,19 @@ def _subprocess_environment() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if not key.startswith("COV_CORE_")}
 
 
+def test_installer_stops_service_before_swap_and_restarts_after_validation() -> None:
+    installer = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+
+    stop = installer.rindex('systemctl stop "$service_name"')
+    swap = installer.index('mv -- "$install_dir" "$backup_dir"')
+    validation = installer.index('"$install_dir/scripts/validate-config.py"')
+    restart = installer.index('systemctl restart "$service_name"')
+
+    assert stop < swap < validation < restart
+    assert "Deployment failed; restoring the previous application version." in installer
+    assert 'systemctl start "$service_name"' in installer
+
+
 def test_validate_config_can_import_app_from_another_working_directory(tmp_path: Path) -> None:
     env_file = tmp_path / "production.env"
     env_file.write_text(
