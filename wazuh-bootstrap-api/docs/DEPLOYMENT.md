@@ -72,9 +72,11 @@ Nginx ani Wazuh. Usunięcie env jest nieodwracalne bez kopii.
 
 ## Typowe problemy
 
-- readiness 503: sprawdź logi, RBAC, poświadczenia, CA oraz zgodność wersji;
-- manifest 503 przy działającym Wazuh: target jest nowszy niż manager;
-- 401 Bootstrap: właściwy klucz/nagłówek i rotacja env;
-- Nginx 403: allowlista;
-- timeout: lokalny Wazuh API, firewall/namespace i ustawienia timeoutów;
-- stale: upstream był chwilowo niedostępny; `dataAsOf` wskazuje wiek danych.
+* readiness 503: sprawdź logi, RBAC, poświadczenia, CA oraz zgodność wersji;
+* manifest 503 przy działającym Wazuh: target jest nowszy niż manager;
+* 401 Bootstrap: właściwy klucz/nagłówek i rotacja env;
+* Nginx 403: allowlista;
+* timeout: lokalny Wazuh API, firewall/namespace i ustawienia timeoutów;
+* stale: upstream był chwilowo niedostępny; `dataAsOf` wskazuje wiek danych.
+
+
