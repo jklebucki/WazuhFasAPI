@@ -22,9 +22,12 @@ env_value() {
     local key="$1"
     local value
     value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)"
-    if [[ "$value" == \"*\" ]]; then
-        value="${value:1:${#value}-2}"
-    fi
+    # Environment files copied from Windows can use CRLF. Command substitution
+    # removes LF but not CR, which would otherwise make curl reject the URL.
+    value="${value%$'\r'}"
+    case "$value" in
+        \"*\"|\'*\') value="${value:1:${#value}-2}" ;;
+    esac
     printf '%s' "$value"
 }
 

@@ -5,9 +5,11 @@ install_dir=/opt/wazuh-bootstrap-api
 env_file=/etc/wazuh-bootstrap-api.env
 service_name=wazuh-bootstrap-api
 upgrade=false
+git_pull=true
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+original_args=("$@")
 
-usage() { echo "Usage: $0 [--upgrade]"; }
+usage() { echo "Usage: $0 [--upgrade] [--no-git-pull]"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --with-nginx)
@@ -15,6 +17,7 @@ while [[ $# -gt 0 ]]; do
             exit 2
             ;;
         --upgrade) upgrade=true; shift ;;
+        --no-git-pull) git_pull=false; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -28,6 +31,72 @@ case "${ID:-}:${ID_LIKE:-}" in
     ubuntu:*|debian:*|*:debian*) ;;
     *) echo "Only Ubuntu and Debian are supported." >&2; exit 1 ;;
 esac
+
+run_repo_git() {
+    local repo_owner repo_home
+    repo_owner="$(stat -c '%U' "$repo_root")"
+    if [[ "$repo_owner" == root ]]; then
+        git -C "$repo_root" "$@"
+        return
+    fi
+
+    repo_home="$(getent passwd "$repo_owner" | cut -d: -f6)"
+    [[ -n "$repo_home" ]] || {
+        echo "Cannot determine the home directory of repository owner $repo_owner." >&2
+        return 1
+    }
+    runuser -u "$repo_owner" -- env HOME="$repo_home" git -C "$repo_root" "$@"
+}
+
+sync_source_checkout() {
+    local candidate branch upstream status before after
+    candidate="$source_dir"
+    repo_root=""
+    while [[ "$candidate" != / ]]; do
+        if [[ -e "$candidate/.git" ]]; then
+            repo_root="$candidate"
+            break
+        fi
+        candidate="$(dirname "$candidate")"
+    done
+
+    if [[ -z "$repo_root" ]]; then
+        echo "Source is not a Git checkout; skipping automatic git pull."
+        return
+    fi
+    command -v git >/dev/null || { echo "Git checkout detected, but git is unavailable." >&2; exit 1; }
+    command -v runuser >/dev/null || { echo "The required runuser command is unavailable." >&2; exit 1; }
+
+    status="$(run_repo_git status --porcelain)"
+    if [[ -n "$status" ]]; then
+        echo "Refusing deployment: the source checkout contains local changes:" >&2
+        printf '%s\n' "$status" >&2
+        echo "Commit, stash or remove them, then rerun the installer." >&2
+        exit 1
+    fi
+    branch="$(run_repo_git symbolic-ref --quiet --short HEAD)" || {
+        echo "Refusing deployment from a detached HEAD." >&2
+        exit 1
+    }
+    upstream="$(run_repo_git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}')" || {
+        echo "Branch $branch has no upstream; automatic git pull is not possible." >&2
+        exit 1
+    }
+    before="$(run_repo_git rev-parse --short HEAD)"
+    echo "Synchronizing $repo_root ($branch from $upstream)..."
+    run_repo_git pull --ff-only
+    after="$(run_repo_git rev-parse --short HEAD)"
+    echo "Source synchronized: $before -> $after."
+}
+
+if $git_pull && [[ ${WAZUH_BOOTSTRAP_AFTER_PULL:-0} != 1 ]]; then
+    sync_source_checkout
+    # The pull may have updated this installer, so continue from its current version.
+    exec env WAZUH_BOOTSTRAP_AFTER_PULL=1 bash "$source_dir/scripts/install.sh" "${original_args[@]}"
+elif ! $git_pull; then
+    echo "Automatic git pull disabled by --no-git-pull."
+fi
+
 if $upgrade && [[ ! -d "$install_dir" ]]; then
     echo "Cannot upgrade: $install_dir does not exist." >&2
     exit 1

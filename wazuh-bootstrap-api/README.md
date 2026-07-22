@@ -41,9 +41,14 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765 --workers 1
 
 ## Wdrożenie produkcyjne
 
-Instalator uruchamiany na `192.168.21.15` nie instaluje, nie konfiguruje i nie usuwa Nginx:
+Rekomendowany checkout produkcyjny to `/srv/WazuhFasAPI`; runtime jest instalowany osobno
+w `/opt/wazuh-bootstrap-api`. Instalator uruchamiany na `192.168.21.15` nie instaluje,
+nie konfiguruje i nie usuwa Nginx:
 
 ```bash
+cd /srv
+sudo gh repo clone jklebucki/WazuhFasAPI /srv/WazuhFasAPI
+cd /srv/WazuhFasAPI/wazuh-bootstrap-api
 sudo ./scripts/install.sh
 ```
 
@@ -91,8 +96,10 @@ Nie używaj `-k` w produkcyjnych konsumentach. Komputery domenowe powinny ufać 
 
 ## Aktualizacja i rollback
 
-`sudo ./scripts/install.sh --upgrade` zachowuje env, tworzy kopię poprzedniego wydania,
-odtwarza venv, waliduje import, restartuje usługę i wykonuje smoke test. Rollback polega na
+`sudo ./scripts/install.sh --upgrade` najpierw wykonuje bezpieczne `git pull --ff-only` jako
+właściciel checkoutu, a potem zachowuje env, tworzy kopię poprzedniego wydania, odtwarza venv,
+waliduje import, restartuje usługę i wykonuje smoke test. Checkout z lokalnymi zmianami nie
+zostanie wdrożony. Opcja `--no-git-pull` służy kontrolowanym wdrożeniom offline. Rollback polega na
 przywróceniu wskazanego katalogu `/opt/wazuh-bootstrap-api.rollback.*`, odtworzeniu venv i
 restarcie usługi. Konfiguracja centralnego Nginx nie jest zmieniana przez ten proces.
 

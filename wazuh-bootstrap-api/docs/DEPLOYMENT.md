@@ -13,6 +13,37 @@ GPO/Windows -> HTTPS wazuh.ad.citronex.pl:8443
 Nginx jest usługą centralną i nie jest instalowany na serwerze Wazuh. `install.sh` oraz
 `uninstall.sh` zarządzają wyłącznie aplikacją FastAPI na `192.168.21.15`.
 
+## Katalog źródłowy i klonowanie repozytorium
+
+Rekomendowanym miejscem na trwały checkout wdrożeniowy jest `/srv/WazuhFasAPI`. Dzięki temu
+źródła pobierane z GitHuba są oddzielone od artefaktu uruchomieniowego w
+`/opt/wazuh-bootstrap-api` oraz sekretów w `/etc/wazuh-bootstrap-api.env`.
+
+```bash
+cd /srv
+sudo gh repo clone jklebucki/WazuhFasAPI /srv/WazuhFasAPI
+cd /srv/WazuhFasAPI/wazuh-bootstrap-api
+sudo ./scripts/install.sh
+```
+
+Polecenie z `sudo gh` jest właściwe dla publicznego repozytorium albo gdy konto `root` jest
+uwierzytelnione w GitHub CLI. Dla prywatnego repozytorium bezpieczniej pozostawić checkout
+własnością użytkownika posiadającego poświadczenia GitHuba:
+
+```bash
+sudo install -d -o jklebucki -g jklebucki -m 0755 /srv/WazuhFasAPI
+gh repo clone jklebucki/WazuhFasAPI /srv/WazuhFasAPI
+cd /srv/WazuhFasAPI/wazuh-bootstrap-api
+sudo ./scripts/install.sh
+```
+
+Instalator rozpoznaje właściciela checkoutu i wykonuje operacje Git z jego uprawnieniami.
+Alternatywnie checkout administrowany przez `root` może znajdować się w
+`/usr/local/src/WazuhFasAPI`, a checkout użytkownika w
+`/home/jklebucki/src/WazuhFasAPI`. Nie klonuj repozytorium bezpośrednio do
+`/opt/wazuh-bootstrap-api`: ten katalog jest atomowo zastępowany podczas każdego wdrożenia.
+Nie umieszczaj kodu w `/etc`, które służy wyłącznie konfiguracji hosta.
+
 ## 1. Centralny proxy 192.168.21.17
 
 Aktywna konfiguracja:
@@ -109,9 +140,24 @@ do punktu dystrybucji CRL firmowego CA.
 ## Aktualizacja, rollback i usunięcie
 
 ```bash
+cd /srv/WazuhFasAPI/wazuh-bootstrap-api
 sudo ./scripts/install.sh --upgrade
 sudo ./scripts/uninstall.sh
 sudo ./scripts/uninstall.sh --purge
+```
+
+Przed instalacją i aktualizacją `install.sh` automatycznie wykonuje `git pull --ff-only`,
+a następnie uruchamia ponownie aktualną wersję samego instalatora. Pull jest wykonywany jako
+właściciel checkoutu. Wdrożenie zostaje przerwane, jeżeli checkout ma lokalne zmiany, działa
+w trybie detached HEAD, nie ma upstreamu albo aktualizacja wymagałaby merge'a. Zapobiega to
+niepowtarzalnym wdrożeniom i przypadkowemu nadpisaniu pracy administratora.
+
+To jest pull-based deployment: jedno polecenie pobiera zatwierdzony stan gałęzi, buduje nowy
+runtime, waliduje konfigurację, restartuje usługę i wykonuje smoke test. W kontrolowanym
+wdrożeniu offline albo przy instalacji ze zweryfikowanego archiwum można pominąć synchronizację:
+
+```bash
+sudo ./scripts/install.sh --upgrade --no-git-pull
 ```
 
 Deinstalator domyślnie zachowuje env. `--purge` usuwa env. Żadne z tych poleceń nie zmienia
@@ -119,9 +165,11 @@ centralnego Nginx ani Wazuh Managera.
 
 ## Typowe problemy
 
-- proxy 503: backend jeszcze nie działa albo firewall blokuje 192.168.21.17;
-- readiness 503: sprawdź RBAC, hasło, CA i zgodność wersji;
-- 401: niewłaściwy klucz Bootstrap API;
-- 403: klient jest poza allowlistą centralnego Nginx;
-- TLS/CRL: sprawdź zaufanie do `ad-CERTSRV-CA` i dostępność CRL;
-- stale: Wazuh był chwilowo niedostępny, a odpowiedź zawiera historyczne `dataAsOf`.
+* proxy 503: backend jeszcze nie działa albo firewall blokuje 192.168.21.17;
+* readiness 503: sprawdź RBAC, hasło, CA i zgodność wersji;
+* 401: niewłaściwy klucz Bootstrap API;
+* 403: klient jest poza allowlistą centralnego Nginx;
+* TLS/CRL: sprawdź zaufanie do `ad-CERTSRV-CA` i dostępność CRL;
+* stale: Wazuh był chwilowo niedostępny, a odpowiedź zawiera historyczne `dataAsOf`.
+
+
