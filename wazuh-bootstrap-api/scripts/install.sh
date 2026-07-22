@@ -5,6 +5,8 @@ install_dir=/opt/wazuh-bootstrap-api
 env_file=/etc/wazuh-bootstrap-api.env
 service_name=wazuh-bootstrap-api
 unit_file=/etc/systemd/system/wazuh-bootstrap-api.service
+log_dir=/var/log/wazuh-bootstrap-api
+log_file=""
 upgrade=false
 git_pull=true
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,6 +34,38 @@ case "${ID:-}:${ID_LIKE:-}" in
     ubuntu:*|debian:*|*:debian*) ;;
     *) echo "Only Ubuntu and Debian are supported." >&2; exit 1 ;;
 esac
+
+start_install_log() {
+    local inherited_log resolved_log
+    inherited_log="${WAZUH_BOOTSTRAP_INSTALL_LOG:-}"
+    if [[ ${WAZUH_BOOTSTRAP_LOGGING_ACTIVE:-0} == 1 && -n "$inherited_log" \
+        && ! -L "$inherited_log" && -f "$inherited_log" ]]; then
+        resolved_log="$(readlink -f -- "$inherited_log")"
+        if [[ "$(dirname -- "$resolved_log")" == "$log_dir" \
+            && "$(stat -c '%U' "$resolved_log")" == root ]]; then
+            log_file="$resolved_log"
+            return
+        fi
+    fi
+
+    install -d -o root -g root -m 0700 "$log_dir"
+    log_file="$log_dir/install-$(date +%Y%m%dT%H%M%S)-$$.log"
+    install -o root -g root -m 0600 /dev/null "$log_file"
+    export WAZUH_BOOTSTRAP_LOGGING_ACTIVE=1
+    export WAZUH_BOOTSTRAP_INSTALL_LOG="$log_file"
+    exec > >(tee -a "$log_file") 2>&1
+}
+
+report_command_error() {
+    local exit_code="$1" line="$2" command="$3"
+    echo "ERROR: command failed with exit code $exit_code at install.sh:$line" >&2
+    echo "ERROR: $command" >&2
+    echo "Full installer log: $log_file" >&2
+}
+
+start_install_log
+trap 'report_command_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+echo "Installer log: $log_file"
 
 run_repo_git() {
     local repo_owner repo_home
@@ -127,6 +161,7 @@ service_was_enabled=false
 cleanup() {
     local exit_code=$?
     trap - EXIT
+    trap - ERR
     set +e
     [[ -n "$stage_dir" && -d "$stage_dir" ]] && rm -rf -- "$stage_dir"
 
@@ -163,6 +198,7 @@ cleanup() {
             fi
         fi
         [[ -n "$failed_dir" ]] && echo "Failed release preserved at $failed_dir" >&2
+        echo "Full installer log: $log_file" >&2
     fi
 
     [[ -n "$unit_backup" && -f "$unit_backup" ]] && rm -f -- "$unit_backup"
@@ -222,6 +258,7 @@ if ! "$install_dir/.venv/bin/python" "$install_dir/scripts/validate-config.py" \
         echo "Installation files are ready, but configuration is invalid." >&2
         echo "Edit $env_file, then rerun this installer with --upgrade." >&2
     fi
+    echo "Full installer log: $log_file" >&2
     exit 2
 fi
 
@@ -236,11 +273,13 @@ fi
 
 if ! "$install_dir/scripts/smoke-test.sh" --env-file "$env_file"; then
     echo "Service started but the smoke test failed." >&2
+    echo "Full installer log: $log_file" >&2
     exit 1
 fi
 deployment_finished=true
 
 echo "Wazuh Bootstrap API installed successfully."
 [[ -n "$backup_dir" ]] && echo "Previous release retained at $backup_dir"
+echo "Installer log: $log_file"
 echo "Central proxy endpoint: https://wazuh.ad.citronex.pl:8443"
 echo "Verify that host firewall permits TCP/8765 only from 192.168.21.17."

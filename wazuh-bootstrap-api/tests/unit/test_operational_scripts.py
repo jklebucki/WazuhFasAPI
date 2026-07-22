@@ -27,6 +27,8 @@ def test_installer_stops_service_before_swap_and_restarts_after_validation() -> 
     assert stop < swap < validation < restart
     assert "Deployment failed; restoring the previous application version." in installer
     assert 'systemctl start "$service_name"' in installer
+    assert "/var/log/wazuh-bootstrap-api" in installer
+    assert "Full installer log:" in installer
 
 
 def test_validate_config_can_import_app_from_another_working_directory(tmp_path: Path) -> None:

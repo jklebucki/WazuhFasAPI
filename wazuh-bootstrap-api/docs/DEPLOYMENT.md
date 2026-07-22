@@ -190,6 +190,16 @@ systemd oraz odtwarza wcześniejszy stan aktywności i autostartu. Nieudane plik
 `/opt/wazuh-bootstrap-api.failed.*` do analizy. Pierwsza instalacja bez wcześniejszego wydania nie
 ma źródła rollbacku i przy błędnym env pozostawia przygotowane pliki do poprawienia konfiguracji.
 
+Pełne wyjście każdej instalacji jest automatycznie zapisywane z uprawnieniami `0600` w
+`/var/log/wazuh-bootstrap-api/install-*.log`. Przy błędzie log zawiera kod wyjścia, numer linii
+i polecenie, które się nie powiodło. `journalctl -u wazuh-bootstrap-api.service` pokazuje tylko
+proces usługi, nie przebieg instalatora. Ostatni log wdrożenia można odczytać poleceniem:
+
+```bash
+sudo less "$(sudo find /var/log/wazuh-bootstrap-api -maxdepth 1 -type f \
+  -name 'install-*.log' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+```
+
 W kontrolowanym wdrożeniu offline albo przy instalacji ze zweryfikowanego archiwum można pominąć
 synchronizację:
 

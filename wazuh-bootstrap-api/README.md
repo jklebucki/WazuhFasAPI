@@ -106,7 +106,8 @@ właściciel checkoutu, zachowuje env, zatrzymuje usługę, tworzy kopię poprze
 odtwarza venv, waliduje import, restartuje usługę i wykonuje smoke test. Błąd po podmianie
 automatycznie przywraca poprzedni runtime, jednostkę systemd i wcześniejszy stan usługi.
 Checkout z lokalnymi zmianami nie zostanie wdrożony. Opcja `--no-git-pull` służy kontrolowanym
-wdrożeniom offline. Konfiguracja centralnego Nginx nie jest zmieniana przez ten proces.
+wdrożeniom offline. Pełne logi instalatora są zapisywane jako pliki root-only w
+`/var/log/wazuh-bootstrap-api/`. Konfiguracja centralnego Nginx nie jest zmieniana przez ten proces.
 
 ## Diagnostyka
 
