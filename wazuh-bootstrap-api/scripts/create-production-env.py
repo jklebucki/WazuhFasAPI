@@ -36,7 +36,7 @@ def build_env(password: str, client_key: str, admin_key: str, sha256: str) -> st
         ("APP_NAME", "Wazuh Bootstrap API"),
         ("APP_ENV", "production"),
         ("APP_VERSION", "1.0.0"),
-        ("BIND_HOST", "127.0.0.1"),
+        ("BIND_HOST", "192.168.21.15"),
         ("BIND_PORT", "8765"),
         ("UVICORN_WORKERS", "1"),
         ("WAZUH_API_URL", "https://localhost:55000"),
@@ -66,6 +66,7 @@ def build_env(password: str, client_key: str, admin_key: str, sha256: str) -> st
         ("DOCS_ENABLED", "false"),
         ("LOG_LEVEL", "INFO"),
         ("TRUST_PROXY_HEADERS", "true"),
+        ("FORWARDED_ALLOW_IPS", "192.168.21.17"),
     ]
     return "\n".join(f"{key}={env_quote(value)}" for key, value in values) + "\n"
 

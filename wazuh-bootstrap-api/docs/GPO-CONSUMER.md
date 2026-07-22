@@ -10,11 +10,11 @@ $Headers = @{
 }
 
 $Manifest = Invoke-RestMethod `
-    -Uri 'https://wazuh-srv.ad.citronex.pl:8443/api/v1/manifest' `
+    -Uri 'https://wazuh.ad.citronex.pl:8443/api/v1/manifest' `
     -Headers $Headers
 
 $AgentState = Invoke-RestMethod `
-    -Uri ("https://wazuh-srv.ad.citronex.pl:8443/api/v1/agents/{0}" -f $env:COMPUTERNAME) `
+    -Uri ("https://wazuh.ad.citronex.pl:8443/api/v1/agents/{0}" -f $env:COMPUTERNAME) `
     -Headers $Headers
 ```
 

@@ -4,14 +4,16 @@ set -Eeuo pipefail
 install_dir=/opt/wazuh-bootstrap-api
 env_file=/etc/wazuh-bootstrap-api.env
 service_name=wazuh-bootstrap-api
-with_nginx=false
 upgrade=false
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-usage() { echo "Usage: $0 [--with-nginx] [--upgrade]"; }
+usage() { echo "Usage: $0 [--upgrade]"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --with-nginx) with_nginx=true; shift ;;
+        --with-nginx)
+            echo "Nginx is hosted on the central proxy 192.168.21.17; it is not installed here." >&2
+            exit 2
+            ;;
         --upgrade) upgrade=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -32,7 +34,6 @@ if $upgrade && [[ ! -d "$install_dir" ]]; then
 fi
 
 packages=(python3 python3-venv python3-pip ca-certificates curl)
-$with_nginx && packages+=(nginx)
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
 python3 -c 'import sys; assert sys.version_info >= (3, 12), "Python 3.12 or newer is required"' \
@@ -79,18 +80,6 @@ fi
 install -o root -g root -m 0644 \
     "$install_dir/deploy/systemd/wazuh-bootstrap-api.service" \
     /etc/systemd/system/wazuh-bootstrap-api.service
-if $with_nginx; then
-    install -o root -g root -m 0644 \
-        "$install_dir/deploy/nginx/wazuh-bootstrap-proxy-headers.conf" \
-        /etc/nginx/snippets/wazuh-bootstrap-proxy-headers.conf
-    install -o root -g root -m 0644 \
-        "$install_dir/deploy/nginx/wazuh-bootstrap-api.conf" \
-        /etc/nginx/sites-available/wazuh-bootstrap-api.conf
-    ln -sfn /etc/nginx/sites-available/wazuh-bootstrap-api.conf \
-        /etc/nginx/sites-enabled/wazuh-bootstrap-api.conf
-    echo "Nginx template installed but not reloaded: review TLS paths and allowlists first."
-fi
-
 systemctl daemon-reload
 if ! "$install_dir/.venv/bin/python" "$install_dir/scripts/validate-config.py" \
     --env-file "$env_file" --import-app; then
@@ -109,5 +98,5 @@ if ! "$install_dir/scripts/smoke-test.sh" --env-file "$env_file"; then
 fi
 
 echo "Wazuh Bootstrap API installed successfully."
-echo "Next: configure a corporate-CA certificate and reviewed subnet allowlists in Nginx."
-$with_nginx && echo "Then run: nginx -t && systemctl reload nginx"
+echo "Central proxy endpoint: https://wazuh.ad.citronex.pl:8443"
+echo "Verify that host firewall permits TCP/8765 only from 192.168.21.17."

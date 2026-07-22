@@ -10,7 +10,7 @@ User=wazuh-bootstrap
 Group=wazuh-bootstrap
 WorkingDirectory=/opt/wazuh-bootstrap-api
 EnvironmentFile=/etc/wazuh-bootstrap-api.env
-ExecStart=/opt/wazuh-bootstrap-api/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+ExecStart=/opt/wazuh-bootstrap-api/.venv/bin/uvicorn app.main:app --host ${BIND_HOST} --port ${BIND_PORT} --workers ${UVICORN_WORKERS} --proxy-headers --forwarded-allow-ips ${FORWARDED_ALLOW_IPS}
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=30

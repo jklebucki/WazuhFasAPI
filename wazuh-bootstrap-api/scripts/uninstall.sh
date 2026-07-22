@@ -2,12 +2,14 @@
 set -Eeuo pipefail
 
 purge=false
-remove_nginx=false
-usage() { echo "Usage: $0 [--purge] [--remove-nginx-config]"; }
+usage() { echo "Usage: $0 [--purge]"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --purge) purge=true; shift ;;
-        --remove-nginx-config) remove_nginx=true; shift ;;
+        --remove-nginx-config)
+            echo "Nginx is managed separately on central proxy 192.168.21.17." >&2
+            exit 2
+            ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -26,11 +28,5 @@ if $purge; then
     echo "Removed /etc/wazuh-bootstrap-api.env (not recoverable unless backed up)."
 else
     echo "Preserved /etc/wazuh-bootstrap-api.env; use --purge to remove it."
-fi
-if $remove_nginx; then
-    rm -f -- /etc/nginx/sites-enabled/wazuh-bootstrap-api.conf \
-        /etc/nginx/sites-available/wazuh-bootstrap-api.conf \
-        /etc/nginx/snippets/wazuh-bootstrap-proxy-headers.conf
-    echo "Removed only Wazuh Bootstrap API Nginx configuration; the Nginx package remains."
 fi
 echo "Wazuh Manager and all of its files were left unchanged."

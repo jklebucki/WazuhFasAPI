@@ -1,7 +1,8 @@
 # Model bezpieczeństwa
 
-Serwis działa jako nieuprzywilejowany `wazuh-bootstrap`, nasłuchuje tylko na localhost i nie
-ma dostępu do plików Wazuh. Nie odczytuje ani nie publikuje `client.keys`; nie rejestruje,
+Serwis działa jako nieuprzywilejowany `wazuh-bootstrap`, wiąże się wyłącznie z adresem
+`192.168.21.15` i nie ma dostępu do plików Wazuh. Firewall dopuszcza TCP/8765 wyłącznie z
+centralnego proxy `192.168.21.17`. Nie odczytuje ani nie publikuje `client.keys`; nie rejestruje,
 usuwa, aktualizuje ani restartuje agentów. Z Wazuh korzysta wyłącznie przez HTTPS API z
 minimalnym RBAC. Klucze klienta i administratora są rozdzielone i porównywane przez
 `secrets.compare_digest`.
@@ -16,10 +17,10 @@ magazyn CA; przy prywatnym CA wskaż plik PEM czytelny przez usługę. `false` j
 wartością ułatwiającą lokalne połączenie z domyślnym certyfikatem Wazuh i powinno być
 zaakceptowanym, udokumentowanym wyjątkiem.
 
-Nginx zapewnia certyfikat z firmowego CA, TLS 1.2/1.3, allowlistę, osobne limity klient/admin,
-małe body i timeouty. Przykładowe podsieci są placeholderami. Zapora hosta powinna dopuścić
-8443 tylko ze zweryfikowanych sieci; port 8765 nie może być wystawiony. CORS, cookies i sesje
-nie są implementowane. OpenAPI jest domyślnie wyłączone i blokowane przez Nginx.
+Centralny Nginx zapewnia wildcard firmowego CA, TLS 1.2/1.3, allowlistę, osobne limity
+klient/admin, małe body i timeouty. Nasłuchuje na `wazuh.ad.citronex.pl:8443`, usuwa nagłówek
+`Server` i jako jedyny host ma dostęp do backendu 8765. CORS, cookies i sesje nie są
+implementowane. OpenAPI jest domyślnie wyłączone i blokowane przez Nginx.
 
 Systemd ogranicza system plików, urządzenia, capabilities, rodziny adresów i bezpośrednio
 blokuje `/var/ossec/etc/client.keys`, dashboard oraz `/etc/shadow`. Hardening nadal dopuszcza

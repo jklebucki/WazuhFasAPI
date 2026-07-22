@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-base_url="http://127.0.0.1:8765"
+base_url=""
 hostname="${HOSTNAME:-$(hostname -s)}"
 env_file="/etc/wazuh-bootstrap-api.env"
 client_key=""
@@ -18,9 +18,28 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$client_key" && $EUID -eq 0 && -r "$env_file" ]]; then
-    client_key="$(sed -n 's/^CLIENT_API_KEY=//p' "$env_file" | tail -n 1)"
+env_value() {
+    local key="$1"
+    local value
+    value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1)"
+    if [[ "$value" == \"*\" ]]; then
+        value="${value:1:${#value}-2}"
+    fi
+    printf '%s' "$value"
+}
+
+if [[ -r "$env_file" ]]; then
+    if [[ -z "$client_key" && $EUID -eq 0 ]]; then
+        client_key="$(env_value CLIENT_API_KEY)"
+    fi
+    if [[ -z "$base_url" ]]; then
+        bind_host="$(env_value BIND_HOST)"
+        bind_port="$(env_value BIND_PORT)"
+        [[ "$bind_host" == "0.0.0.0" || "$bind_host" == "::" ]] && bind_host="127.0.0.1"
+        base_url="http://${bind_host:-127.0.0.1}:${bind_port:-8765}"
+    fi
 fi
+base_url="${base_url:-http://127.0.0.1:8765}"
 [[ ${#client_key} -ge 32 ]] || { echo "A valid client key is required." >&2; exit 2; }
 
 curl_common=(--fail --silent --show-error --connect-timeout 3 --max-time 15)

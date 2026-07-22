@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     docs_enabled: bool = Field(False, alias="DOCS_ENABLED")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     trust_proxy_headers: bool = Field(True, alias="TRUST_PROXY_HEADERS")
+    forwarded_allow_ips: str = Field("127.0.0.1", alias="FORWARDED_ALLOW_IPS")
 
     @field_validator("wazuh_api_ca_file", mode="before")
     @classmethod

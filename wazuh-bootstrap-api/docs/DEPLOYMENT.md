@@ -1,82 +1,127 @@
-# Wdrożenie Ubuntu/Debian
+# Wdrożenie produkcyjne
 
-## Przygotowanie
+## Topologia
 
-Wymagane są Python 3.12+, dostęp localhost do `https://127.0.0.1:55000`, konto Wazuh z
-minimalnym RBAC, firmowy rekord DNS/certyfikat oraz zaakceptowana allowlista. Serwis nie
-wymaga i nie może otrzymać dostępu do katalogów Wazuh.
-
-```bash
-sudo ./scripts/install.sh --with-nginx
+```text
+GPO/Windows -> HTTPS wazuh.ad.citronex.pl:8443
+            -> Nginx 192.168.21.17
+            -> HTTP 192.168.21.15:8765
+            -> FastAPI
+            -> HTTPS localhost:55000 (Wazuh Server API)
 ```
 
-Pierwsza instalacja tworzy `/etc/wazuh-bootstrap-api.env` z placeholderami i bezpiecznie
-kończy się przed startem. Wygeneruj klucze, wpisz sekrety i parametry:
+Nginx jest usługą centralną i nie jest instalowany na serwerze Wazuh. `install.sh` oraz
+`uninstall.sh` zarządzają wyłącznie aplikacją FastAPI na `192.168.21.15`.
 
-```bash
-sudo python3 /opt/wazuh-bootstrap-api/scripts/generate-api-keys.py \
-  --write /root/wazuh-bootstrap.keys
-sudoedit /etc/wazuh-bootstrap-api.env
-sudo /opt/wazuh-bootstrap-api/.venv/bin/python \
-  /opt/wazuh-bootstrap-api/scripts/validate-config.py \
-  --env-file /etc/wazuh-bootstrap-api.env
-sudo /path/to/source/scripts/install.sh --upgrade
+## 1. Centralny proxy 192.168.21.17
+
+Aktywna konfiguracja:
+
+```text
+/etc/nginx/sites-available/wazuh-bootstrap-api.conf
+/etc/nginx/sites-enabled/wazuh-bootstrap-api.conf
+/etc/nginx/snippets/wazuh-bootstrap-proxy-headers.conf
 ```
 
-Przenieś wartości kluczy ręcznie i bezpiecznie; usuń tymczasowy plik root po zatwierdzeniu.
-Ustaw env `root:wazuh-bootstrap 0640`. Przy `TARGET_AGENT_VERSION=auto` docelowa wersja jest
-wersją managera. Pusty URL MSI jest generowany. SHA-256 oblicz jednorazowo skryptem
-`calculate-msi-sha256.sh URL`, zweryfikuj niezależnie i wstaw do env.
+Vhost używa wildcardu `/etc/ssl/cert_ad/ad.citronex.pl.{pem,key}`, TLS 1.2/1.3, portu 8443,
+allowlisty `192.168.0.0/16`, osobnych rate limitów oraz backendu `192.168.21.15:8765`.
+Moduł `libnginx-mod-http-headers-more-filter` usuwa nagłówek `Server`.
 
-## TLS i Nginx
-
-Umieść certyfikat firmowego CA i klucz w katalogu dostępnym tylko dla root/Nginx. Edytuj
-`/etc/nginx/sites-available/wazuh-bootstrap-api.conf`: DNS, obie ścieżki TLS i każdą regułę
-`allow`. Przykładowe RFC1918 nie są rekomendacją produkcyjną.
+Po każdej zmianie:
 
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
-sudo ss -lntp | grep -E ':(8443|8765)\b'
+curl -k -i https://127.0.0.1:8443/health/live \
+  -H 'Host: wazuh.ad.citronex.pl'
 ```
 
-8765 ma widnieć wyłącznie na 127.0.0.1. Certyfikat powinien mieć SAN zgodny z DNS. Nie twórz
-samopodpisanego certyfikatu produkcyjnego.
+Przed uruchomieniem FastAPI proxy zwraca kontrolowane 503.
 
-## Weryfikacja
+## 2. Przygotowanie serwera Wazuh 192.168.21.15
+
+Wymagane są Python 3.12+, konto API z minimalnym RBAC oraz dostęp do lokalnego portu 55000.
+Pierwsze wywołanie tworzy użytkownika, grupę, katalog aplikacji i przykładowy env, po czym
+bezpiecznie zatrzyma się, jeśli konfiguracja zawiera placeholdery:
 
 ```bash
-sudo systemctl status wazuh-bootstrap-api
-curl -fsS http://127.0.0.1:8765/health/live
-curl -fsS http://127.0.0.1:8765/health/ready
-sudo /opt/wazuh-bootstrap-api/scripts/smoke-test.sh --hostname LAP006
-sudo journalctl -u wazuh-bootstrap-api -n 100 --no-pager
+sudo ./scripts/install.sh
 ```
 
-Z zaufanej stacji sprawdź HTTPS, łańcuch certyfikatu i odrzucenie adresu spoza allowlisty.
+Nie używaj `--with-nginx`; instalator celowo odrzuca tę opcję.
+
+## 3. Konfiguracja i CA Wazuh API
+
+Skopiuj ignorowany produkcyjny plik z komputera administracyjnego, a następnie zainstaluj go:
+
+```bash
+sudo install -o root -g wazuh-bootstrap -m 0640 \
+  /ścieżka/do/wazuh-bootstrap-api.env \
+  /etc/wazuh-bootstrap-api.env
+```
+
+Certyfikat API ma `SAN=localhost`, dlatego env używa `https://localhost:55000`. Utwórz
+lokalny plik z publicznym certyfikatem serwera:
+
+```bash
+sudo sh -c \
+  'openssl s_client -connect 127.0.0.1:55000 -servername localhost </dev/null 2>/dev/null |
+   openssl x509 -out /etc/wazuh-bootstrap-api-wazuh-ca.pem'
+sudo chown root:wazuh-bootstrap /etc/wazuh-bootstrap-api-wazuh-ca.pem
+sudo chmod 0640 /etc/wazuh-bootstrap-api-wazuh-ca.pem
+```
+
+Zweryfikuj odcisk certyfikatu niezależnym kanałem przed zaufaniem mu.
+
+## 4. Firewall backendu
+
+FastAPI wiąże się wyłącznie z `192.168.21.15:8765`. Port ma być dostępny tylko z proxy:
+
+```bash
+sudo ufw allow from 192.168.21.17 to any port 8765 proto tcp
+```
+
+Przed zastosowaniem sprawdź bieżącą politykę `ufw status verbose`. Nie dodawaj ogólnego
+`allow 8765`. W innych firewallach zastosuj równoważną regułę. Wazuh API 55000 nie jest
+potrzebne centralnemu proxy i powinno pozostać ograniczone.
+
+## 5. Start i test
+
+Po zainstalowaniu env i CA:
+
+```bash
+sudo ./scripts/install.sh --upgrade
+sudo systemctl status wazuh-bootstrap-api
+sudo /opt/wazuh-bootstrap-api/scripts/smoke-test.sh --hostname LAP006
+sudo ss -lntp | grep ':8765'
+```
+
+Oczekiwany bind to wyłącznie `192.168.21.15:8765`. Następnie z komputera domenowego:
+
+```bash
+curl -fsS https://wazuh.ad.citronex.pl:8443/health/live
+curl -fsS https://wazuh.ad.citronex.pl:8443/health/ready
+```
+
+Nie używaj `-k`. Jeśli Windows zgłasza `CRYPT_E_REVOCATION_OFFLINE`, zapewnij klientom dostęp
+do punktu dystrybucji CRL firmowego CA.
 
 ## Aktualizacja, rollback i usunięcie
 
-`sudo ./scripts/install.sh --upgrade` zachowuje env, tworzy kopię poprzedniego katalogu,
-odtwarza venv, waliduje, restartuje i wykonuje smoke test. Przy błędzie skrypt wypisuje ścieżkę
-kopii rollback. Aby wycofać: zatrzymaj usługę, zamień `/opt/wazuh-bootstrap-api` na wskazaną
-kopię, odtwórz venv z jej locka, uruchom usługę i smoke test.
-
 ```bash
+sudo ./scripts/install.sh --upgrade
 sudo ./scripts/uninstall.sh
-sudo ./scripts/uninstall.sh --purge --remove-nginx-config
+sudo ./scripts/uninstall.sh --purge
 ```
 
-Pierwsza forma zachowuje env. Druga usuwa również env i własne pliki Nginx, ale nigdy pakiet
-Nginx ani Wazuh. Usunięcie env jest nieodwracalne bez kopii.
+Deinstalator domyślnie zachowuje env. `--purge` usuwa env. Żadne z tych poleceń nie zmienia
+centralnego Nginx ani Wazuh Managera.
 
 ## Typowe problemy
 
-* readiness 503: sprawdź logi, RBAC, poświadczenia, CA oraz zgodność wersji;
-* manifest 503 przy działającym Wazuh: target jest nowszy niż manager;
-* 401 Bootstrap: właściwy klucz/nagłówek i rotacja env;
-* Nginx 403: allowlista;
-* timeout: lokalny Wazuh API, firewall/namespace i ustawienia timeoutów;
-* stale: upstream był chwilowo niedostępny; `dataAsOf` wskazuje wiek danych.
-
-
+- proxy 503: backend jeszcze nie działa albo firewall blokuje 192.168.21.17;
+- readiness 503: sprawdź RBAC, hasło, CA i zgodność wersji;
+- 401: niewłaściwy klucz Bootstrap API;
+- 403: klient jest poza allowlistą centralnego Nginx;
+- TLS/CRL: sprawdź zaufanie do `ad-CERTSRV-CA` i dostępność CRL;
+- stale: Wazuh był chwilowo niedostępny, a odpowiedź zawiera historyczne `dataAsOf`.
