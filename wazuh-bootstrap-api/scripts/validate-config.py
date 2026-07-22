@@ -18,8 +18,40 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def decode_env_value(raw_value: str, line_number: int) -> str:
+    value = raw_value.strip()
+    if not value:
+        return ""
+    if value[0] not in {'"', "'"}:
+        return value
+
+    quote = value[0]
+    if len(value) < 2 or value[-1] != quote:
+        raise ValueError(f"unterminated quoted value at line {line_number}")
+    inner = value[1:-1]
+    if quote == "'":
+        if quote in inner:
+            raise ValueError(f"unexpected quote at line {line_number}")
+        return inner
+
+    decoded: list[str] = []
+    index = 0
+    while index < len(inner):
+        character = inner[index]
+        if character == '"':
+            raise ValueError(f"unexpected quote at line {line_number}")
+        if character == "\\":
+            index += 1
+            if index >= len(inner):
+                raise ValueError(f"unterminated escape at line {line_number}")
+            character = inner[index]
+        decoded.append(character)
+        index += 1
+    return "".join(decoded)
+
+
 def load_env(path: Path) -> None:
-    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for number, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -28,7 +60,7 @@ def load_env(path: Path) -> None:
         key, value = line.split("=", 1)
         if not key or any(char.isspace() for char in key):
             raise ValueError(f"invalid env key at line {number}")
-        os.environ[key] = value
+        os.environ[key] = decode_env_value(value, number)
 
 
 def main() -> int:
