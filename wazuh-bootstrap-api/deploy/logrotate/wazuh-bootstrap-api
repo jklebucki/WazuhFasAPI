@@ -1,0 +1,14 @@
+# The application logs to journald. This stanza only covers an optional Nginx access log.
+/var/log/nginx/wazuh-bootstrap-api*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        [ ! -f /run/nginx.pid ] || kill -USR1 $(cat /run/nginx.pid)
+    endscript
+}
