@@ -65,6 +65,11 @@ https://wazuh.ad.citronex.pl:8443
 
 Jego źródło znajduje się w `deploy/nginx/wazuh-bootstrap-api.conf`.
 
+Opcjonalna dokumentacja OpenAPI jest sterowana przez `DOCS_ENABLED`. Po ustawieniu wartości
+`true` dostępne są Swagger UI pod `/docs`, ReDoc pod `/redoc` i schemat pod
+`/openapi.json`. Swagger udostępnia osobne pola autoryzacji dla klucza klienta i administratora.
+Szczegóły bezpiecznej aktywacji opisuje [instrukcja wdrożenia](docs/DEPLOYMENT.md).
+
 ## Kontrole jakości
 
 ```bash

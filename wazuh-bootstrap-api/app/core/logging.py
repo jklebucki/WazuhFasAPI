@@ -13,6 +13,14 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+DEFAULT_CSP = "default-src 'none'"
+DOCS_CSP = (
+    "default-src 'none'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "connect-src 'self'"
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -56,7 +64,8 @@ class RequestMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = "default-src 'none'"
+        is_docs_ui = request.url.path == "/redoc" or request.url.path.startswith("/docs")
+        response.headers["Content-Security-Policy"] = DOCS_CSP if is_docs_ui else DEFAULT_CSP
         if "Cache-Control" not in response.headers:
             response.headers["Cache-Control"] = "no-store"
         logging.getLogger("wazuh_bootstrap.access").info(

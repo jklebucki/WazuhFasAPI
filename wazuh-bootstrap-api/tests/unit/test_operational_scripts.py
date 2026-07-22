@@ -11,6 +11,11 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _subprocess_environment() -> dict[str, str]:
+    """Keep pytest-cov's parent configuration out of independently executed scripts."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("COV_CORE_")}
+
+
 def test_validate_config_can_import_app_from_another_working_directory(tmp_path: Path) -> None:
     env_file = tmp_path / "production.env"
     env_file.write_text(
@@ -41,6 +46,7 @@ def test_validate_config_can_import_app_from_another_working_directory(tmp_path:
             "--import-app",
         ],
         cwd=tmp_path,
+        env=_subprocess_environment(),
         capture_output=True,
         text=True,
         check=False,
@@ -65,7 +71,7 @@ def test_smoke_test_accepts_crlf_environment_file(tmp_path: Path) -> None:
     curl_stub = bin_dir / "curl"
     curl_stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >>"$CURL_LOG"\n', encoding="utf-8")
     curl_stub.chmod(0o755)
-    process_env = os.environ.copy()
+    process_env = _subprocess_environment()
     process_env["PATH"] = f"{bin_dir}{os.pathsep}{process_env['PATH']}"
     process_env["CURL_LOG"] = str(curl_log)
 

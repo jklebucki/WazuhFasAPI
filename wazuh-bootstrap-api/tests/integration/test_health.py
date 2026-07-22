@@ -2,6 +2,8 @@ import httpx
 import respx
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
+from app.main import create_app
 from tests.conftest import token, wazuh_response
 
 
@@ -16,6 +18,39 @@ def test_liveness_security_headers_and_docs_disabled(client: TestClient) -> None
     assert response.headers["cache-control"] == "no-store"
     assert client.get("/docs").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_docs_enabled_exposes_ui_and_api_key_security_schemes(settings: Settings) -> None:
+    docs_settings = settings.model_copy(update={"docs_enabled": True})
+    with TestClient(create_app(docs_settings)) as docs_client:
+        docs = docs_client.get("/docs")
+        redoc = docs_client.get("/redoc")
+        schema_response = docs_client.get("/openapi.json")
+
+    assert docs.status_code == 200
+    assert redoc.status_code == 200
+    assert "https://cdn.jsdelivr.net" in docs.headers["content-security-policy"]
+    assert "connect-src 'self'" in docs.headers["content-security-policy"]
+    assert schema_response.status_code == 200
+
+    schema = schema_response.json()
+    schemes = schema["components"]["securitySchemes"]
+    assert schemes["ClientApiKey"] == {
+        "type": "apiKey",
+        "description": "Client key used by bootstrap consumers and agent lookup.",
+        "in": "header",
+        "name": "X-API-Key",
+    }
+    assert schemes["AdminApiKey"] == {
+        "type": "apiKey",
+        "description": "Administrator key used by agent and group inventory endpoints.",
+        "in": "header",
+        "name": "X-Admin-API-Key",
+    }
+    assert schema["paths"]["/api/v1/manifest"]["get"]["security"] == [{"ClientApiKey": []}]
+    assert schema["paths"]["/api/v1/agents/{hostname}"]["get"]["security"] == [{"ClientApiKey": []}]
+    assert schema["paths"]["/api/v1/agents"]["get"]["security"] == [{"AdminApiKey": []}]
+    assert schema["paths"]["/api/v1/groups"]["get"]["security"] == [{"AdminApiKey": []}]
 
 
 @respx.mock

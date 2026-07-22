@@ -4,6 +4,10 @@ Bazowa ścieżka: `/api/v1`. Odpowiedzi z datami używają ISO 8601 UTC. API jes
 do odczytu; jedyne logowanie upstream to `POST /security/user/authenticate?raw=true`, po nim
 wykonywane są tylko `GET /manager/info`, `GET /agents` i `GET /groups`.
 
+Po włączeniu `DOCS_ENABLED` kontrakt jest dostępny jako OpenAPI pod `/openapi.json`,
+Swagger UI pod `/docs` oraz ReDoc pod `/redoc`. Schematy `ClientApiKey` i `AdminApiKey`
+odpowiadają nagłówkom pokazanym w tabeli i są dostępne przez przycisk **Authorize**.
+
 | Endpoint | Uwierzytelnienie | Znaczenie |
 |---|---|---|
 | `GET /health/live` | brak | proces działa; bez kontaktu z Wazuh |

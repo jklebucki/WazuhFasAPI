@@ -81,6 +81,33 @@ sudo ./scripts/install.sh
 
 Nie używaj `--with-nginx`; instalator celowo odrzuca tę opcję.
 
+### Opcjonalna dokumentacja API
+
+FastAPI udostępnia Swagger UI (`/docs`), ReDoc (`/redoc`) oraz kontrakt OpenAPI
+(`/openapi.json`). Są domyślnie wyłączone i zwracają 404. Aby włączyć je w kontrolowanej
+sieci wewnętrznej, ustaw w `/etc/wazuh-bootstrap-api.env`:
+
+```dotenv
+DOCS_ENABLED=true
+```
+
+Następnie zrestartuj usługę:
+
+```bash
+sudo systemctl restart wazuh-bootstrap-api.service
+curl -fsS https://wazuh.ad.citronex.pl:8443/openapi.json >/dev/null
+```
+
+Swagger pokazuje dwa niezależne schematy w oknie **Authorize**:
+
+- `ClientApiKey` — nagłówek `X-API-Key` dla manifestu i wyszukiwania agenta;
+- `AdminApiKey` — nagłówek `X-Admin-API-Key` dla list agentów i grup.
+
+Klucze są przechowywane wyłącznie w pamięci bieżącej karty przeglądarki. Nie zapisuj ich
+w dokumentacji, adresach URL ani zrzutach ekranu. Centralny Nginx musi mieć wdrożoną bieżącą
+wersję `deploy/nginx/wazuh-bootstrap-api.conf`, ponieważ zawiera osobny rate limit i CSP dla
+dokumentacji.
+
 ## 3. Konfiguracja i CA Wazuh API
 
 Skopiuj ignorowany produkcyjny plik z komputera administracyjnego, a następnie zainstaluj go:
@@ -171,5 +198,4 @@ centralnego Nginx ani Wazuh Managera.
 * 403: klient jest poza allowlistą centralnego Nginx;
 * TLS/CRL: sprawdź zaufanie do `ad-CERTSRV-CA` i dostępność CRL;
 * stale: Wazuh był chwilowo niedostępny, a odpowiedź zawiera historyczne `dataAsOf`.
-
 
