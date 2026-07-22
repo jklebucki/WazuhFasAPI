@@ -105,6 +105,8 @@ Nie używaj `-k` w produkcyjnych konsumentach. Komputery domenowe powinny ufać 
 właściciel checkoutu, zachowuje env, zatrzymuje usługę, tworzy kopię poprzedniego wydania,
 odtwarza venv, waliduje import, restartuje usługę i wykonuje smoke test. Błąd po podmianie
 automatycznie przywraca poprzedni runtime, jednostkę systemd i wcześniejszy stan usługi.
+Smoke test czeka do 30 sekund na osiągnięcie liveness po restarcie, aby nie wywoływać rollbacku
+w trakcie normalnego startu Uvicorna.
 Checkout z lokalnymi zmianami nie zostanie wdrożony. Opcja `--no-git-pull` służy kontrolowanym
 wdrożeniom offline. Pełne logi instalatora są zapisywane jako pliki root-only w
 `/var/log/wazuh-bootstrap-api/`. Konfiguracja centralnego Nginx nie jest zmieniana przez ten proces.

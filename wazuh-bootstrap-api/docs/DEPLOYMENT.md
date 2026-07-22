@@ -184,6 +184,10 @@ runtime, zatrzymuje działającą usługę przed podmianą `/opt/wazuh-bootstrap
 konfigurację, włącza autostart, restartuje usługę i wykonuje smoke test. Poprzednie wydanie
 pozostaje w `/opt/wazuh-bootstrap-api.rollback.*`.
 
+Po restarcie smoke test czeka do 30 sekund na otwarcie endpointu `/health/live`, dzięki czemu
+nie traktuje normalnego czasu startu Uvicorna jako awarii. Limit można zmienić przy ręcznym
+uruchomieniu opcją `--startup-timeout SECONDS`; po jego przekroczeniu instalator wykonuje rollback.
+
 Jeżeli po podmianie wystąpi błąd tworzenia środowiska Python, walidacji, startu lub smoke testu,
 instalator automatycznie zatrzymuje nieudane wydanie, przywraca poprzedni runtime i plik jednostki
 systemd oraz odtwarza wcześniejszy stan aktywności i autostartu. Nieudane pliki pozostają w

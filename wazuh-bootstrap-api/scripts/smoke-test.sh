@@ -5,18 +5,27 @@ base_url=""
 hostname="${HOSTNAME:-$(hostname -s)}"
 env_file="/etc/wazuh-bootstrap-api.env"
 client_key=""
+startup_timeout=30
 
-usage() { echo "Usage: $0 [--base-url URL] [--hostname NAME] [--client-key KEY] [--env-file FILE]"; }
+usage() {
+    echo "Usage: $0 [--base-url URL] [--hostname NAME] [--client-key KEY]" \
+        "[--env-file FILE] [--startup-timeout SECONDS]"
+}
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --base-url) base_url="$2"; shift 2 ;;
         --hostname) hostname="$2"; shift 2 ;;
         --client-key) client_key="$2"; shift 2 ;;
         --env-file) env_file="$2"; shift 2 ;;
+        --startup-timeout) startup_timeout="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
 done
+[[ "$startup_timeout" =~ ^[1-9][0-9]*$ ]] || {
+    echo "Startup timeout must be a positive integer." >&2
+    exit 2
+}
 
 env_value() {
     local key="$1"
@@ -46,6 +55,16 @@ base_url="${base_url:-http://127.0.0.1:8765}"
 [[ ${#client_key} -ge 32 ]] || { echo "A valid client key is required." >&2; exit 2; }
 
 curl_common=(--fail --silent --show-error --connect-timeout 3 --max-time 15)
+startup_deadline=$((SECONDS + startup_timeout))
+until curl --fail --silent --connect-timeout 1 --max-time 2 \
+    "$base_url/health/live" >/dev/null 2>&1; do
+    if (( SECONDS >= startup_deadline )); then
+        echo "Service did not become live within ${startup_timeout}s." >&2
+        curl "${curl_common[@]}" "$base_url/health/live" >/dev/null
+        exit 1
+    fi
+    sleep 1
+done
 curl "${curl_common[@]}" "$base_url/health/live" >/dev/null
 curl "${curl_common[@]}" "$base_url/health/ready" >/dev/null
 
