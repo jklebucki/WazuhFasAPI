@@ -36,11 +36,39 @@ def test_enrollment_check_never_prints_password_and_supports_safe_comparison() -
 
     assert "<use_password>yes</use_password>" in checker
     assert "cmp -s --" in checker
+    assert "--challenge" in checker
+    assert "hmac.new(password, challenge, hashlib.sha256)" in checker
+    assert "ENROLLMENT_PROOF:" in checker
+    assert "Challenge mode cannot be combined with file override options." in checker
     assert "wazuh-authd -t" in checker
     assert "Password has a non-empty, GPO-compatible format." in checker
     assert "printf '%s\\n' \"$password\"" not in checker
     assert 'echo "$password"' not in checker
     assert 'cat "$password_file"' not in checker
+
+
+def test_gpo_readiness_check_is_strict_and_never_prints_secrets() -> None:
+    checker = (
+        PROJECT_ROOT / "deploy" / "gpo" / "Test-WazuhGpoReadiness.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "Get-SmbShareAccess" in checker
+    assert "EncryptData" in checker
+    assert "AreAccessRulesProtected" in checker
+    assert "UTF-8 BOM" in checker
+    assert "'X-API-Key' = $ApiKey" in checker
+    assert "/api/v1/manifest" in checker
+    assert "Test-WazuhEnrollmentProof" in checker
+    assert "BatchMode=yes" in checker
+    assert "StrictHostKeyChecking=yes" in checker
+    assert "sudo -n --" in checker
+    assert "HMACSHA256" in checker
+    assert "NOT READY" in checker
+    assert "SkipCertificateCheck" not in checker
+    assert "Write-Host $apiKey" not in checker
+    assert "Write-Output $apiKey" not in checker
+    assert "Write-Host $enrollmentPassword" not in checker
+    assert "Write-Output $enrollmentPassword" not in checker
 
 
 def test_validate_config_can_import_app_from_another_working_directory(tmp_path: Path) -> None:

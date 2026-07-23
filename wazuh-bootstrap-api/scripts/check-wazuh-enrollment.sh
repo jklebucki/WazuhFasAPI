@@ -4,6 +4,9 @@ set -Eeuo pipefail
 config_file="/var/ossec/etc/ossec.conf"
 password_file="/var/ossec/etc/authd.pass"
 expected_password_file=""
+challenge=""
+config_overridden=0
+password_file_overridden=0
 
 usage() {
     cat <<'EOF'
@@ -16,6 +19,7 @@ Options:
   --config FILE                 Wazuh manager configuration
   --password-file FILE          Manager authd password file
   --expected-password-file FILE Compare with another protected one-line file
+  --challenge HEX               Return a one-time HMAC proof for a 64-hex challenge
   -h, --help                    Show help
 EOF
 }
@@ -24,14 +28,20 @@ while (($# > 0)); do
     case "$1" in
         --config)
             config_file="${2:?Missing value for --config}"
+            config_overridden=1
             shift 2
             ;;
         --password-file)
             password_file="${2:?Missing value for --password-file}"
+            password_file_overridden=1
             shift 2
             ;;
         --expected-password-file)
             expected_password_file="${2:?Missing value for --expected-password-file}"
+            shift 2
+            ;;
+        --challenge)
+            challenge="${2:?Missing value for --challenge}"
             shift 2
             ;;
         -h | --help)
@@ -45,6 +55,14 @@ while (($# > 0)); do
             ;;
     esac
 done
+
+if [[ -n "$challenge" ]] && {
+    ((config_overridden != 0 || password_file_overridden != 0)) ||
+        [[ -n "$expected_password_file" ]]
+}; then
+    printf 'Challenge mode cannot be combined with file override options.\n' >&2
+    exit 2
+fi
 
 if ((EUID != 0)); then
     printf 'Run this check as root (for example with sudo).\n' >&2
@@ -153,6 +171,40 @@ if [[ -n "$expected_password_file" ]]; then
         pass "Expected-password file matches manager authd.pass."
     else
         fail "Expected-password file does not match manager authd.pass."
+    fi
+fi
+
+if [[ -n "$challenge" ]]; then
+    if [[ ! "$challenge" =~ ^[[:xdigit:]]{64}$ ]]; then
+        fail "Challenge must contain exactly 64 hexadecimal characters."
+    elif ! command -v python3 >/dev/null 2>&1; then
+        fail "python3 is required to generate an enrollment proof."
+    elif [[ ! -f "$password_file" || -L "$password_file" ]]; then
+        fail "Enrollment proof cannot be generated without a regular password file."
+    else
+        if proof="$(
+            python3 - "$password_file" "$challenge" <<'PY'
+import hashlib
+import hmac
+import sys
+from pathlib import Path
+
+password_path = Path(sys.argv[1])
+challenge = bytes.fromhex(sys.argv[2])
+password = password_path.read_bytes()
+if password.endswith(b"\n"):
+    password = password[:-1]
+if not password or b"\r" in password or b"\n" in password:
+    raise SystemExit(1)
+print(hmac.new(password, challenge, hashlib.sha256).hexdigest())
+PY
+        )" && [[ "$proof" =~ ^[[:xdigit:]]{64}$ ]]; then
+            pass "One-time enrollment proof was generated."
+            printf 'ENROLLMENT_PROOF:%s\n' "$proof"
+        else
+            fail "Unable to generate the one-time enrollment proof."
+        fi
+        unset proof
     fi
 fi
 
