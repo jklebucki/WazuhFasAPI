@@ -1,0 +1,17 @@
+{
+  "bootstrapApiUrl": "https://wazuh.ad.citronex.pl:8443",
+  "apiKeyFile": "\\\\FILESERVER.ad.citronex.pl\\WazuhDeployment$\\client-api-key.txt",
+  "enrollmentPasswordFile": "\\\\FILESERVER.ad.citronex.pl\\WazuhDeployment$\\enrollment-password.txt",
+  "agentGroup": "",
+  "allowedDownloadHosts": [
+    "packages.wazuh.com"
+  ],
+  "allowedSignerSubjectRegex": "(?i)\\bWazuh\\b",
+  "requireManifestSha256": true,
+  "auditOnly": true,
+  "forceRepair": false,
+  "apiRetryCount": 6,
+  "apiRetryDelaySeconds": 10,
+  "enrollmentTimeoutSeconds": 120,
+  "logDirectory": "C:\\ProgramData\\Citronex\\WazuhBootstrap\\Logs"
+}

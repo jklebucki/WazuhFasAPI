@@ -1,5 +1,6 @@
 .env
 deploy/env/wazuh-bootstrap-api.env
+deploy/gpo/WazuhAgentGpo.config.json
 .venv/
 __pycache__/
 *.py[cod]
