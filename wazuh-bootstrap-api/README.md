@@ -52,8 +52,10 @@ cd /srv/WazuhFasAPI/wazuh-bootstrap-api
 sudo ./scripts/install.sh
 ```
 
-Produkcja używa `/etc/wazuh-bootstrap-api.env`. Lokalny, gotowy plik znajduje się w
-`deploy/env/wazuh-bootstrap-api.env` i jest wykluczony przez `.gitignore`. Przed startem
+Produkcja używa `/etc/wazuh-bootstrap-api.env`. Lokalny, gotowy plik
+`deploy/env/wazuh-bootstrap-api.env` jest wykluczony przez `.gitignore`, a wersjonowany wzorzec
+znajduje się w
+[wazuh-bootstrap-api.env.example](deploy/env/wazuh-bootstrap-api.env.example). Przed startem
 utwórz `/etc/wazuh-bootstrap-api-wazuh-ca.pem` oraz ustaw uprawnienia opisane w
 [instrukcji wdrożenia](docs/DEPLOYMENT.md).
 
@@ -63,7 +65,8 @@ Centralny vhost jest utrzymywany niezależnie na `192.168.21.17` i odpowiada pod
 https://wazuh.ad.citronex.pl:8443
 ```
 
-Jego źródło znajduje się w `deploy/nginx/wazuh-bootstrap-api.conf`.
+Jego źródło znajduje się w
+[wazuh-bootstrap-api.conf](deploy/nginx/wazuh-bootstrap-api.conf).
 
 Opcjonalna dokumentacja OpenAPI jest sterowana przez `DOCS_ENABLED`. Po ustawieniu wartości
 `true` dostępne są Swagger UI pod `/docs`, ReDoc pod `/redoc` i schemat pod
@@ -101,11 +104,17 @@ Nie używaj `-k` w produkcyjnych konsumentach. Komputery domenowe powinny ufać 
 
 ## Agent Windows przez GPO
 
-`deploy/gpo/Install-WazuhAgent.ps1` jest idempotentnym skryptem startowym dla komputerów AD.
-Instaluje, naprawia lub aktualizuje agenta na podstawie manifestu, zachowuje lokalną tożsamość,
-weryfikuje SHA-256 i Authenticode oraz odmawia automatycznego enrollmentu przy konflikcie nazwy.
+[Install-WazuhAgent.ps1](deploy/gpo/Install-WazuhAgent.ps1) jest idempotentnym skryptem
+startowym dla komputerów AD. Instaluje, naprawia lub aktualizuje agenta na podstawie manifestu,
+zachowuje wyłącznie prawidłową lokalną tożsamość, weryfikuje SHA-256 i Authenticode oraz odmawia
+automatycznego enrollmentu przy konflikcie nazwy. Ponowne uruchomienie po przerwanym MSI naprawia
+częściową instalację; pusty lub nieprawidłowy `client.keys` nie jest przywracany jako kopia
+tożsamości.
+
 Konfiguracja przykładowa startuje w trybie `auditOnly=true`; tajemnice są odczytywane z osobnego,
-chronionego udziału dostępnego dla kont komputerów i nigdy nie trafiają do SYSVOL.
+chronionego udziału dostępnego dla kont komputerów i nigdy nie trafiają do SYSVOL. Przed
+aktywacją użyj [Test-WazuhGpoReadiness.ps1](deploy/gpo/Test-WazuhGpoReadiness.ps1), który
+kontroluje udział, ACL, poświadczenia FastAPI i hasło enrollmentu Wazuh.
 
 Procedura pilota, podpisania PowerShell, konfiguracji GPMC, ACL udziału i aktywacji znajduje się
 w [instrukcji wdrożenia GPO](docs/GPO-DEPLOYMENT.md). Kontrolowaną macierz awarii i procedurę
