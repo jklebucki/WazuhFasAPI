@@ -73,6 +73,55 @@ Describe 'Install-WazuhAgent local file health' {
     }
 }
 
+Describe 'Install-WazuhAgent identity backup and recovery' {
+    It 'allows a clean installation with no identity files to restore' {
+        $installDirectory = Join-Path $TestDrive 'clean-install'
+        $workDirectory = Join-Path $TestDrive 'clean-work'
+        $null = New-Item -ItemType Directory -Path $installDirectory, $workDirectory -Force
+
+        $backupFiles = @(Backup-AgentIdentity -InstallDirectory $installDirectory `
+                -WorkDirectory $workDirectory -ComputerName 'LAP006')
+
+        $backupFiles.Count | Should Be 0
+        Restore-AgentIdentity -InstallDirectory $installDirectory `
+            -WorkDirectory $workDirectory -Files @()
+        $true | Should Be $true
+    }
+
+    It 'does not preserve an empty client key from a partial installation' {
+        $installDirectory = Join-Path $TestDrive 'partial-install'
+        $workDirectory = Join-Path $TestDrive 'partial-work'
+        $null = New-Item -ItemType Directory -Path $installDirectory, $workDirectory -Force
+        [IO.File]::WriteAllBytes((Join-Path $installDirectory 'client.keys'), [byte[]]@())
+        Set-Content -LiteralPath (Join-Path $installDirectory 'ossec.conf') `
+            -Value '<ossec_config><client><server><address>192.0.2.1</address></server></client></ossec_config>' `
+            -Encoding UTF8
+
+        $backupFiles = @(Backup-AgentIdentity -InstallDirectory $installDirectory `
+                -WorkDirectory $workDirectory -ComputerName 'LAP006')
+
+        $backupFiles.Count | Should Be 1
+        ($backupFiles -contains 'ossec.conf') | Should Be $true
+        ($backupFiles -contains 'client.keys') | Should Be $false
+        (Test-Path -LiteralPath (Join-Path $workDirectory 'client.keys')) | Should Be $false
+    }
+
+    It 'preserves a structurally valid identity for the current computer' {
+        $installDirectory = Join-Path $TestDrive 'valid-install'
+        $workDirectory = Join-Path $TestDrive 'valid-work'
+        $null = New-Item -ItemType Directory -Path $installDirectory, $workDirectory -Force
+        Set-Content -LiteralPath (Join-Path $installDirectory 'client.keys') `
+            -Value '123 LAP006 any abcdef0123456789abcdef0123456789' -Encoding ASCII
+
+        $backupFiles = @(Backup-AgentIdentity -InstallDirectory $installDirectory `
+                -WorkDirectory $workDirectory -ComputerName 'LAP006')
+
+        $backupFiles.Count | Should Be 1
+        ($backupFiles -contains 'client.keys') | Should Be $true
+        (Test-Path -LiteralPath (Join-Path $workDirectory 'client.keys')) | Should Be $true
+    }
+}
+
 Describe 'Install-WazuhAgent configuration repair' {
     It 'writes a Wazuh fragment without an XML declaration' {
         $path = Join-Path $TestDrive 'ossec.conf'

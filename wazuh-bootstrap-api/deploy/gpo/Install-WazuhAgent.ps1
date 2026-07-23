@@ -612,10 +612,15 @@ function Backup-AgentIdentity {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$InstallDirectory,
-        [Parameter(Mandatory)][string]$WorkDirectory
+        [Parameter(Mandatory)][string]$WorkDirectory,
+        [Parameter()][ValidateNotNullOrEmpty()][string]$ComputerName = $env:COMPUTERNAME
     )
 
-    $files = @('client.keys')
+    $files = @()
+    $clientKeyPath = Join-Path $InstallDirectory 'client.keys'
+    if (Test-LocalClientKey -LiteralPath $clientKeyPath -ComputerName $ComputerName) {
+        $files += 'client.keys'
+    }
     $configurationPath = Join-Path $InstallDirectory 'ossec.conf'
     if (Test-LocalAgentConfiguration -LiteralPath $configurationPath) {
         $files += 'ossec.conf'
@@ -636,8 +641,10 @@ function Restore-AgentIdentity {
     param(
         [Parameter(Mandatory)][string]$InstallDirectory,
         [Parameter(Mandatory)][string]$WorkDirectory,
-        [Parameter(Mandatory)][string[]]$Files
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Files
     )
+
+    if ($Files.Count -eq 0) { return }
 
     foreach ($fileName in $Files) {
         $source = Join-Path $WorkDirectory $fileName
@@ -1210,8 +1217,10 @@ function Invoke-WazuhAgentDeployment {
                 $installDirectory = Get-AgentInstallDirectory -Manifest $manifest
                 $executablePath = Join-Path $installDirectory $executableName
                 Stop-AgentService -ServiceName $serviceName -ExecutablePath $executablePath
-                Restore-AgentIdentity -InstallDirectory $installDirectory `
-                    -WorkDirectory $workDirectory -Files $backupFiles
+                if ($backupFiles.Count -gt 0) {
+                    Restore-AgentIdentity -InstallDirectory $installDirectory `
+                        -WorkDirectory $workDirectory -Files $backupFiles
+                }
                 if (-not $configurationHealthy) {
                     Repair-AgentConfiguration `
                         -LiteralPath (Join-Path $installDirectory $configFileName) `
@@ -1221,7 +1230,8 @@ function Invoke-WazuhAgentDeployment {
                 }
             }
             catch {
-                if (Test-Path -LiteralPath $installDirectory -PathType Container) {
+                if ($backupFiles.Count -gt 0 -and
+                    (Test-Path -LiteralPath $installDirectory -PathType Container)) {
                     Restore-AgentIdentity -InstallDirectory $installDirectory `
                         -WorkDirectory $workDirectory -Files $backupFiles
                 }
