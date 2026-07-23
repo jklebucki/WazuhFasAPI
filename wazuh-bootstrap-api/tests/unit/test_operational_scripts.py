@@ -31,6 +31,18 @@ def test_installer_stops_service_before_swap_and_restarts_after_validation() -> 
     assert "Full installer log:" in installer
 
 
+def test_enrollment_check_never_prints_password_and_supports_safe_comparison() -> None:
+    checker = (PROJECT_ROOT / "scripts" / "check-wazuh-enrollment.sh").read_text(encoding="utf-8")
+
+    assert "<use_password>yes</use_password>" in checker
+    assert "cmp -s --" in checker
+    assert "wazuh-authd -t" in checker
+    assert "Password has a non-empty, GPO-compatible format." in checker
+    assert "printf '%s\\n' \"$password\"" not in checker
+    assert 'echo "$password"' not in checker
+    assert 'cat "$password_file"' not in checker
+
+
 def test_validate_config_can_import_app_from_another_working_directory(tmp_path: Path) -> None:
     env_file = tmp_path / "production.env"
     env_file.write_text(
