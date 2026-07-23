@@ -27,10 +27,10 @@ Skrypt GPO nie modyfikuje managera ani jego `authd.pass`.
 
 Kontrola wykonana 23 lipca 2026 r. na Wazuh 4.14.6 wykazała:
 
-- `wazuh-authd` działa i nasłuchuje na TCP/1515;
-- enrollment jest włączony przez `<disabled>no</disabled>`;
-- uwierzytelnienie hasłem jest wyłączone przez `<use_password>no</use_password>`;
-- plik `/var/ossec/etc/authd.pass` nie istnieje.
+* `wazuh-authd` działa i nasłuchuje na TCP/1515;
+* enrollment jest włączony przez `<disabled>no</disabled>`;
+* uwierzytelnienie hasłem jest włączone przez `<use_password>yes</use_password>`;
+* `/var/ossec/etc/authd.pass` istnieje z właścicielem `root:wazuh` i trybem `640`.
 
 Wazuh nie definiuje dla tego mechanizmu osobnego użytkownika. Agent przekazuje jedno wspólne
 hasło enrollmentu. Przed aktywacją GPO trzeba więc skonfigurować hasło na managerze i zapisać
@@ -41,8 +41,7 @@ identyczną wartość w chronionym `enrollment-password.txt`.
 Najpierw wykonaj kopię konfiguracji:
 
 ```bash
-sudo cp -a /var/ossec/etc/ossec.conf \
-  "/var/ossec/etc/ossec.conf.before-enrollment-password.$(date -u +%Y%m%dT%H%M%SZ)"
+sudo cp -a /var/ossec/etc/ossec.conf "/var/ossec/etc/ossec.conf.before-enrollment-password.$(date -u +%Y%m%dT%H%M%SZ)"
 ```
 
 Uruchom `sudoedit /var/ossec/etc/ossec.conf` i w istniejącej sekcji `<auth>` zmień wyłącznie:
@@ -56,10 +55,8 @@ Utwórz hasło interaktywnie, aby nie trafiło do historii powłoki:
 ```bash
 read -rsp 'Nowe hasło enrollmentu: ' WAZUH_ENROLLMENT_PASSWORD
 printf '\n'
-printf '%s\n' "$WAZUH_ENROLLMENT_PASSWORD" |
-  sudo tee /var/ossec/etc/authd.pass >/dev/null
+printf '%s\n' "$WAZUH_ENROLLMENT_PASSWORD" | sudo tee /var/ossec/etc/authd.pass >/dev/null
 unset WAZUH_ENROLLMENT_PASSWORD
-
 sudo chown root:wazuh /var/ossec/etc/authd.pass
 sudo chmod 640 /var/ossec/etc/authd.pass
 ```
@@ -81,34 +78,18 @@ Skrypt kontrolny nie wyświetla hasła i nie tworzy rekordu agenta. Sprawdza kon
 Opcjonalnie może bez ujawniania wartości porównać dwa chronione pliki:
 
 ```bash
-sudo ./scripts/check-wazuh-enrollment.sh \
-  --expected-password-file /root/enrollment-password.expected
+sudo ./scripts/check-wazuh-enrollment.sh --expected-password-file /root/enrollment-password.expected
 ```
 
 Porównanie jest lokalne. Plik oczekiwany usuń bezpiecznie po kontroli.
 
-## 2. Grupa komputerów pilotażowych
+## 2. Zakres wszystkich komputerów domenowych
 
-Na kontrolerze domeny utwórz dedykowaną grupę zabezpieczeń, np.:
-
-```powershell
-Import-Module ActiveDirectory
-
-New-ADGroup `
-  -Name 'GG_Wazuh_Agent_Deployment_Computers' `
-  -SamAccountName 'GG_Wazuh_Agent_Deployment_Computers' `
-  -GroupCategory Security `
-  -GroupScope Global `
-  -Path 'OU=Groups,DC=ad,DC=citronex,DC=pl'
-
-Add-ADGroupMember `
-  -Identity 'GG_Wazuh_Agent_Deployment_Computers' `
-  -Members 'LAP006$'
-```
-
-Po zmianie członkostwa zrestartuj komputer pilotażowy, aby jego token Kerberos zawierał nową
-grupę. Najpierw użyj kilku komputerów reprezentujących: poprawną instalację, starszą wersję oraz
-brak agenta.
+Docelowym zakresem jest wbudowana grupa domenowa o RID `515`, czyli `Domain Computers`.
+Nie wpisuj jej nazwy tekstowo, ponieważ nazwa wyświetlana zależy od języka domeny. Poniższe
+polecenia wyliczają SID bieżącej domeny, dodają RID `515` i tłumaczą wynik na lokalną nazwę
+konta. Wdrożenie pilotażowe realizuj przez początkowe podłączenie GPO tylko do testowego OU,
+a następnie podłączanie go do kolejnych OU. Nie łącz tego GPO z OU `Domain Controllers`.
 
 ## 3. Chroniony udział z tajemnicami
 
@@ -116,24 +97,24 @@ Nie zapisuj klucza API ani hasła enrollmentu w skrypcie, JSON-ie, GPP, SYSVOL l
 GPO. Rekomendowany jest ukryty udział na serwerze plików, nie dodatkowa rola na kontrolerze
 domeny. Konto komputera odczytuje pliki przez Kerberos.
 
-Przykład na serwerze `FILESERVER.ad.citronex.pl`:
+Przykład na serwerze `fssrv.ad.citronex.pl`:
 
 ```powershell
 $SecretRoot = 'D:\WazuhDeploymentSecrets'
-New-Item -ItemType Directory -Path $SecretRoot -Force
-
+$DomainEntry = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().GetDirectoryEntry()
+$DomainSid = [System.Security.Principal.SecurityIdentifier]::new([byte[]]$DomainEntry.Properties['objectSid'][0], 0)
+$DeploymentGroup = ([System.Security.Principal.SecurityIdentifier]::new("$($DomainSid.Value)-515")).Translate([System.Security.Principal.NTAccount]).Value
+$AdminsName = ([System.Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value
+$EveryoneName = ([System.Security.Principal.SecurityIdentifier]'S-1-1-0').Translate([System.Security.Principal.NTAccount]).Value
+New-Item -ItemType Directory -Path $SecretRoot -Force | Out-Null
 icacls.exe $SecretRoot /inheritance:r
-icacls.exe $SecretRoot /grant:r `
-  '*S-1-5-18:(OI)(CI)F' `
-  '*S-1-5-32-544:(OI)(CI)F' `
-  'AD\GG_Wazuh_Agent_Deployment_Computers:(OI)(CI)RX'
-
-New-SmbShare `
-  -Name 'WazuhDeployment$' `
-  -Path $SecretRoot `
-  -FullAccess 'AD\Domain Admins' `
-  -ReadAccess 'AD\GG_Wazuh_Agent_Deployment_Computers' `
-  -EncryptData $true
+icacls.exe $SecretRoot /remove:g '*S-1-1-0'
+icacls.exe $SecretRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "$DeploymentGroup`:(OI)(CI)RX"
+$ExistingShare = Get-SmbShare -Name 'WazuhDeployment$' -ErrorAction SilentlyContinue
+if ($null -eq $ExistingShare) { New-SmbShare -Name 'WazuhDeployment$' -Path $SecretRoot -FullAccess $AdminsName -ReadAccess $DeploymentGroup -EncryptData $true | Out-Null } elseif (-not $ExistingShare.Path.Equals($SecretRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Udział WazuhDeployment$ wskazuje na $($ExistingShare.Path), oczekiwano $SecretRoot." } else { Set-SmbShare -Name 'WazuhDeployment$' -EncryptData $true -Force }
+Grant-SmbShareAccess -Name 'WazuhDeployment$' -AccountName $AdminsName -AccessRight Full -Force | Out-Null
+Grant-SmbShareAccess -Name 'WazuhDeployment$' -AccountName $DeploymentGroup -AccessRight Read -Force | Out-Null
+Revoke-SmbShareAccess -Name 'WazuhDeployment$' -AccountName $EveryoneName -Force -ErrorAction SilentlyContinue
 ```
 
 Utwórz dwa jednoliniowe pliki bez BOM:
@@ -148,9 +129,9 @@ Wpisz wartości interaktywnie albo za pomocą zatwierdzonego systemu zarządzani
 zawiera dokładnie tę samą pojedynczą linię co `/var/ossec/etc/authd.pass` na managerze.
 Nie dodawaj nazw zmiennych, cudzysłowów ani spacji.
 Zweryfikuj, że udział nie przyznaje dostępu `Everyone`, `Authenticated Users`, `Domain Users`
-ani użytkownikom interaktywnym. Kompromitacja dowolnego komputera należącego do grupy nadal
-umożliwia odczyt współdzielonego hasła enrollmentu — ogranicz grupę, monitoruj dostęp i rotuj
-hasło po dużej fali wdrożeń.
+ani użytkownikom interaktywnym. Ponieważ `Domain Computers` obejmuje wszystkie komputery
+domenowe, kompromitacja dowolnego z nich umożliwia odczyt współdzielonego hasła enrollmentu.
+Ogranicz port 1515 do zarządzanych podsieci, monitoruj enrollment i rotuj hasło po wdrożeniu.
 
 Jeśli organizacja posiada system zarządzania sekretami wydający tajemnice per urządzenie,
 zastąp udział SMB takim mechanizmem. Skrypt wymaga jedynie ścieżki do jednoliniowego pliku
@@ -200,19 +181,12 @@ wydawcy i jego łańcuch rozprowadź do magazynów `Trusted Publishers` i odpowi
 Podpisz finalną, niezmienną kopię:
 
 ```powershell
-$Certificate = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
-  Where-Object { $_.NotAfter -gt (Get-Date).AddMonths(1) } |
-  Select-Object -First 1
-
-Set-AuthenticodeSignature `
-  -FilePath '.\Install-WazuhAgent.ps1' `
-  -Certificate $Certificate `
-  -HashAlgorithm SHA256
+$Certificate = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.NotAfter -gt (Get-Date).AddMonths(1) } | Select-Object -First 1
+Set-AuthenticodeSignature -FilePath '.\Install-WazuhAgent.ps1' -Certificate $Certificate -HashAlgorithm SHA256
 ```
 
 Sprawdź `Status=Valid`. Każda zmiana skryptu unieważnia podpis i wymaga ponownego podpisania.
-Włącz `Computer Configuration > Administrative Templates > Windows Components > Windows
-PowerShell > Turn on Script Execution` jako **Allow only signed scripts** po potwierdzeniu
+Włącz `Computer Configuration > Administrative Templates > Windows Components > Windows PowerShell > Turn on Script Execution` jako **Allow only signed scripts** po potwierdzeniu
 dystrybucji zaufania.
 
 ## 7. Konfiguracja skryptu startowego
@@ -249,10 +223,10 @@ wykonają dwóch instalacji.
 
 ## 8. Delegacja i linkowanie GPO
 
-Połącz GPO wyłącznie z OU komputerów docelowych — nigdy z OU `Domain Controllers`. W Security
-Filtering dodaj `GG_Wazuh_Agent_Deployment_Computers` z `Read` i `Apply group policy`. Jeżeli
-usuwasz `Authenticated Users` z filtrowania, zachowaj dla niego albo `Domain Computers` prawo
-`Read`, zgodnie z przyjętym modelem delegacji GPO.
+Połącz GPO z OU wszystkich docelowych stacji i serwerów — nigdy z OU `Domain Controllers`.
+W Security Filtering dodaj przetłumaczoną przez system grupę z RID `515` (`Domain Computers`)
+z prawami `Read` i `Apply group policy`. Jeżeli usuwasz `Authenticated Users` z filtrowania,
+upewnij się, że `Domain Computers` zachowuje oba wymagane prawa.
 
 Sprawdź wynik:
 
@@ -267,17 +241,15 @@ Ponieważ jest to Startup Script, test wykonaj po restarcie komputera.
 
 Przy `auditOnly=true` skrypt:
 
-- pobiera manifest i stan rekordu;
-- ocenia lokalną wersję, usługę i klucz;
-- nie pobiera MSI, nie zatrzymuje usługi i nie wykonuje enrollmentu;
-- zapisuje planowaną operację do chronionego logu.
+* pobiera manifest i stan rekordu;
+* ocenia lokalną wersję, usługę i klucz;
+* nie pobiera MSI, nie zatrzymuje usługi i nie wykonuje enrollmentu;
+* zapisuje planowaną operację do chronionego logu.
 
 Na pilocie sprawdź:
 
 ```powershell
-Get-Content 'C:\ProgramData\Citronex\WazuhBootstrap\Logs\WazuhAgentGpo-*.jsonl' |
-  Select-Object -Last 20
-
+Get-Content 'C:\ProgramData\Citronex\WazuhBootstrap\Logs\WazuhAgentGpo-*.jsonl' | Select-Object -Last 20
 Get-Service WazuhSvc -ErrorAction SilentlyContinue
 ```
 
@@ -293,8 +265,8 @@ Po zaakceptowaniu pilota ustaw w JSON:
 ```
 
 Podpis PowerShell nie zmienia się, ponieważ JSON nie jest wykonywalny i nie zawiera sekretów.
-Rozszerzaj członkostwo grupy komputerów etapami. Monitoruj lokalne logi, stan `WazuhSvc`, ruch
-1515 i nowe rekordy w managerze.
+Rozszerzaj linkowanie GPO z testowego OU na kolejne OU etapami. Monitoruj lokalne logi, stan
+`WazuhSvc`, ruch 1515 i nowe rekordy w managerze.
 
 Skrypt zachowuje poprawny `client.keys` i nie wykonuje downgrade'u. Naprawa uszkodzonej
 instalacji tej samej wersji może wykonać kontrolowane odinstalowanie i ponowną instalację
@@ -305,13 +277,13 @@ działania, ale celowo nie odinstalowuje już wdrożonego Wazuh.
 
 Najczęstsze przypadki:
 
-- kod 20: zaufanie TLS, klucz API, DNS, proxy lub chwilowa niedostępność API;
-- kod 30: rekord managera istnieje bez lokalnego klucza albo duplikat nazwy;
-- brak instalacji w audycie: `auditOnly` nadal ma wartość `true`;
-- kod 40 przy paczce: brak SHA-256, niedozwolony host, podpis lub CRL;
-- kod 50: zabezpieczony katalog roboczy i `msiexec.log` pozostają w `%ProgramData%`;
-- kod 60: usługa, lokalny klucz lub enrollment;
-- enrollment timeout: port 1515, hasło authd, unikalność nazwy i log
+* kod 20: zaufanie TLS, klucz API, DNS, proxy lub chwilowa niedostępność API;
+* kod 30: rekord managera istnieje bez lokalnego klucza albo duplikat nazwy;
+* brak instalacji w audycie: `auditOnly` nadal ma wartość `true`;
+* kod 40 przy paczce: brak SHA-256, niedozwolony host, podpis lub CRL;
+* kod 50: zabezpieczony katalog roboczy i `msiexec.log` pozostają w `%ProgramData%`;
+* kod 60: usługa, lokalny klucz lub enrollment;
+* enrollment timeout: port 1515, hasło authd, unikalność nazwy i log
   `C:\Program Files (x86)\ossec-agent\ossec.log`.
 
 Przed rozszerzeniem GPO poza pilot wykonaj macierz opisaną w

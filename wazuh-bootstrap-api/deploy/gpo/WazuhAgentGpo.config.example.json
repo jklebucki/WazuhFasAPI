@@ -1,7 +1,7 @@
 {
   "bootstrapApiUrl": "https://wazuh.ad.citronex.pl:8443",
-  "apiKeyFile": "\\\\FILESERVER.ad.citronex.pl\\WazuhDeployment$\\client-api-key.txt",
-  "enrollmentPasswordFile": "\\\\FILESERVER.ad.citronex.pl\\WazuhDeployment$\\enrollment-password.txt",
+  "apiKeyFile": "\\\\fssrv.ad.citronex.pl\\WazuhDeployment$\\client-api-key.txt",
+  "enrollmentPasswordFile": "\\\\fssrv.ad.citronex.pl\\WazuhDeployment$\\enrollment-password.txt",
   "agentGroup": "",
   "allowedDownloadHosts": [
     "packages.wazuh.com"
