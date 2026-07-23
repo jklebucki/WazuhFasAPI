@@ -100,21 +100,19 @@ domeny. Konto komputera odczytuje pliki przez Kerberos.
 Przykład na serwerze `fssrv.ad.citronex.pl`:
 
 ```powershell
-$SecretRoot = 'D:\WazuhDeploymentSecrets'
-$DomainEntry = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().GetDirectoryEntry()
-$DomainSid = [System.Security.Principal.SecurityIdentifier]::new([byte[]]$DomainEntry.Properties['objectSid'][0], 0)
-$DeploymentGroup = ([System.Security.Principal.SecurityIdentifier]::new("$($DomainSid.Value)-515")).Translate([System.Security.Principal.NTAccount]).Value
-$AdminsName = ([System.Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value
-$EveryoneName = ([System.Security.Principal.SecurityIdentifier]'S-1-1-0').Translate([System.Security.Principal.NTAccount]).Value
-New-Item -ItemType Directory -Path $SecretRoot -Force | Out-Null
-icacls.exe $SecretRoot /inheritance:r
-icacls.exe $SecretRoot /remove:g '*S-1-1-0'
-icacls.exe $SecretRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "$DeploymentGroup`:(OI)(CI)RX"
-$ExistingShare = Get-SmbShare -Name 'WazuhDeployment$' -ErrorAction SilentlyContinue
-if ($null -eq $ExistingShare) { New-SmbShare -Name 'WazuhDeployment$' -Path $SecretRoot -FullAccess $AdminsName -ReadAccess $DeploymentGroup -EncryptData $true | Out-Null } elseif (-not $ExistingShare.Path.Equals($SecretRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Udział WazuhDeployment$ wskazuje na $($ExistingShare.Path), oczekiwano $SecretRoot." } else { Set-SmbShare -Name 'WazuhDeployment$' -EncryptData $true -Force }
-Grant-SmbShareAccess -Name 'WazuhDeployment$' -AccountName $AdminsName -AccessRight Full -Force | Out-Null
-Grant-SmbShareAccess -Name 'WazuhDeployment$' -AccountName $DeploymentGroup -AccessRight Read -Force | Out-Null
-Revoke-SmbShareAccess -Name 'WazuhDeployment$' -AccountName $EveryoneName -Force -ErrorAction SilentlyContinue
+& { Set-StrictMode -Version Latest; $ErrorActionPreference = 'Stop'; $ShareName = 'WazuhDeployment$'; $DefaultRoot = 'E:\WazuhDeploymentSecrets'; $ExistingShare = Get-SmbShare -Name $ShareName -ErrorAction SilentlyContinue; $SecretRoot = if ($null -ne $ExistingShare) { $ExistingShare.Path } else { $DefaultRoot }; $DomainSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.AccountDomainSid; if ($null -eq $DomainSid) { throw 'Uruchom podniesiony PowerShell jako konto domenowe.' }; $DeploymentGroup = ([System.Security.Principal.SecurityIdentifier]::new("$($DomainSid.Value)-515")).Translate([System.Security.Principal.NTAccount]).Value; $DomainUsersName = ([System.Security.Principal.SecurityIdentifier]::new("$($DomainSid.Value)-513")).Translate([System.Security.Principal.NTAccount]).Value; $AdminsName = ([System.Security.Principal.SecurityIdentifier]'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value; $EveryoneName = ([System.Security.Principal.SecurityIdentifier]'S-1-1-0').Translate([System.Security.Principal.NTAccount]).Value; $AuthenticatedUsersName = ([System.Security.Principal.SecurityIdentifier]'S-1-5-11').Translate([System.Security.Principal.NTAccount]).Value; New-Item -ItemType Directory -Path $SecretRoot -Force | Out-Null; icacls.exe $SecretRoot /inheritance:r | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Nie udało się wyłączyć dziedziczenia NTFS.' }; icacls.exe $SecretRoot /remove:g '*S-1-1-0' '*S-1-5-11' "*$($DomainSid.Value)-513" | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Nie udało się usunąć szerokich uprawnień NTFS.' }; icacls.exe $SecretRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "*$($DomainSid.Value)-515:(OI)(CI)RX" | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'Nie udało się ustawić docelowych uprawnień NTFS.' }; if ($null -eq $ExistingShare) { New-SmbShare -Name $ShareName -Path $SecretRoot -FullAccess $AdminsName -ReadAccess $DeploymentGroup -EncryptData $true | Out-Null } else { Set-SmbShare -Name $ShareName -EncryptData $true -Force | Out-Null }; @($EveryoneName, $AuthenticatedUsersName, $DomainUsersName) | ForEach-Object { Unblock-SmbShareAccess -Name $ShareName -AccountName $_ -Force -ErrorAction SilentlyContinue | Out-Null; Revoke-SmbShareAccess -Name $ShareName -AccountName $_ -Force -ErrorAction SilentlyContinue | Out-Null }; @($DeploymentGroup, $AdminsName) | ForEach-Object { Unblock-SmbShareAccess -Name $ShareName -AccountName $_ -Force -ErrorAction SilentlyContinue | Out-Null; Revoke-SmbShareAccess -Name $ShareName -AccountName $_ -Force -ErrorAction SilentlyContinue | Out-Null }; Grant-SmbShareAccess -Name $ShareName -AccountName $AdminsName -AccessRight Full -Force | Out-Null; Grant-SmbShareAccess -Name $ShareName -AccountName $DeploymentGroup -AccessRight Read -Force | Out-Null; [pscustomobject]@{ Share = $ShareName; Path = $SecretRoot; DeploymentGroup = $DeploymentGroup; Encryption = (Get-SmbShare -Name $ShareName).EncryptData } }
+```
+
+Ustaw dokładny ACL NTFS, usuwając również wcześniejsze indywidualne wpisy administratorów:
+
+```powershell
+& { $Path = (Get-SmbShare -Name 'WazuhDeployment$').Path; $DomainSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.AccountDomainSid; if ($null -eq $DomainSid) { throw 'Uruchom podniesiony PowerShell jako konto domenowe.' }; $SystemSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-18'; $AdminsSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-544'; $ComputersSid = [System.Security.Principal.SecurityIdentifier]::new("$($DomainSid.Value)-515"); $Inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit; $Propagation = [System.Security.AccessControl.PropagationFlags]::None; $Allow = [System.Security.AccessControl.AccessControlType]::Allow; $Acl = Get-Acl -LiteralPath $Path; $Acl.SetAccessRuleProtection($true, $false); foreach ($Rule in @($Acl.Access)) { $null = $Acl.RemoveAccessRuleSpecific($Rule) }; $Acl.SetOwner($AdminsSid); $Acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($SystemSid, [System.Security.AccessControl.FileSystemRights]::FullControl, $Inheritance, $Propagation, $Allow)); $Acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($AdminsSid, [System.Security.AccessControl.FileSystemRights]::FullControl, $Inheritance, $Propagation, $Allow)); $Acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($ComputersSid, [System.Security.AccessControl.FileSystemRights]::ReadAndExecute, $Inheritance, $Propagation, $Allow)); Set-Acl -LiteralPath $Path -AclObject $Acl }
+```
+
+Zweryfikuj wynik drugim, niezależnym poleceniem:
+
+```powershell
+Write-Host "`n=== UDZIAŁ ==="; Get-SmbShare -Name 'WazuhDeployment$' | Select-Object Name, Path, EncryptData | Format-Table -AutoSize | Out-Host; Write-Host "`n=== UPRAWNIENIA SMB ==="; Get-SmbShareAccess -Name 'WazuhDeployment$' | Select-Object AccountName, AccessControlType, AccessRight | Format-Table -AutoSize | Out-Host; Write-Host "`n=== UPRAWNIENIA NTFS ==="; Get-Acl (Get-SmbShare -Name 'WazuhDeployment$').Path | Select-Object Owner, AccessToString | Format-List | Out-Host
 ```
 
 Utwórz dwa jednoliniowe pliki bez BOM:
@@ -136,6 +134,78 @@ Ogranicz port 1515 do zarządzanych podsieci, monitoruj enrollment i rotuj hasł
 Jeśli organizacja posiada system zarządzania sekretami wydający tajemnice per urządzenie,
 zastąp udział SMB takim mechanizmem. Skrypt wymaga jedynie ścieżki do jednoliniowego pliku
 dostępnego dla `LocalSystem`.
+
+### Kontrola gotowości przed wdrożeniem
+
+Na serwerze plików skopiuj lub uruchom bezpośrednio z checkoutu
+`deploy/gpo/Test-WazuhGpoReadiness.ps1`. Otwórz Windows PowerShell 5.1 jako administrator
+domenowy. Po przygotowaniu opisanego poniżej dostępu SSH wykonaj:
+
+```powershell
+.\deploy\gpo\Test-WazuhGpoReadiness.ps1 -WazuhSshIdentityFile "$env:USERPROFILE\.ssh\wazuh-readiness-ed25519"
+```
+
+Skrypt nie wyświetla sekretów. Sprawdza:
+
+* istnienie ukrytego udziału i włączone szyfrowanie SMB;
+* dokładne uprawnienia udziału dla `BUILTIN\Administrators` oraz grupy domenowej o RID `515`;
+* właściciela i zasadę najmniejszych uprawnień w ACL NTFS katalogu oraz obu plików;
+* brak dodatkowych użytkowników, reguł `Deny`, reparse pointów i dziedziczenia katalogu
+  nadrzędnego;
+* niepuste UTF-8 bez BOM, końca linii, NUL, białych znaków na brzegach i wartości
+  `CHANGE_ME`;
+* minimum 32 znaki dla `CLIENT_API_KEY` i minimum 16 znaków dla hasła enrollmentu;
+* rozdzielenie obu sekretów;
+* przyjęcie klucza klienta przez `GET /api/v1/manifest`, połączenie FastAPI z Wazuh API,
+  zgodność managera oraz obecność produkcyjnego SHA-256 paczki MSI;
+* zgodność `enrollment-password.txt` z `/var/ossec/etc/authd.pass` przez jednorazowy HMAC,
+  a także proces `wazuh-authd`, port enrollmentu i test konfiguracji managera.
+
+Sprawdzenie Wazuh nie wykonuje próbnego enrollmentu i nie tworzy agenta. Windows generuje
+losowy challenge, a uruchomiony jako `root` checker managera odpowiada HMAC-em. Hasło nie jest
+przesyłane przez SSH, zapisywane w argumentach ani wyświetlane. Zwykły `agent-auth` nie nadaje
+się do tej kontroli, ponieważ poprawna próba rejestruje agenta.
+
+Najpierw zaktualizuj aplikację na managerze, aby
+`/opt/wazuh-bootstrap-api/scripts/check-wazuh-enrollment.sh` obsługiwał `--challenge`.
+Checker Windows używa wyłącznie uwierzytelnienia kluczem SSH i nie prosi o hasło:
+
+```powershell
+ssh-keygen.exe -t ed25519 -a 100 -f "$env:USERPROFILE\.ssh\wazuh-readiness-ed25519" -C 'wazuh-gpo-readiness'
+```
+
+Ustaw silne hasło klucza. Przed kontrolą załaduj go do Windows OpenSSH Agent:
+
+```powershell
+Get-Service ssh-agent | Set-Service -StartupType Manual; Start-Service ssh-agent; ssh-add.exe "$env:USERPROFILE\.ssh\wazuh-readiness-ed25519"
+```
+
+```powershell
+Get-Content -LiteralPath "$env:USERPROFILE\.ssh\wazuh-readiness-ed25519.pub" | ssh.exe jklebucki@192.168.21.15 "umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys"
+```
+
+Na managerze utwórz przez `sudo visudo -f /etc/sudoers.d/wazuh-enrollment-proof` regułę:
+
+```text
+Cmnd_Alias WAZUH_ENROLLMENT_PROOF = /opt/wazuh-bootstrap-api/scripts/check-wazuh-enrollment.sh --challenge [A-Fa-f0-9]*
+jklebucki ALL=(root) NOPASSWD: WAZUH_ENROLLMENT_PROOF
+```
+
+Tryb `--challenge` akceptuje wyłącznie 64 znaki szesnastkowe i odrzuca wszystkie opcje
+zmieniające ścieżki. Plik checkera i cały katalog `/opt/wazuh-bootstrap-api` muszą pozostać
+własnością `root` i nie mogą być zapisywalne przez `jklebucki`.
+
+Wynik końcowy `READY` i kod procesu `0` są wymagane przed przełączeniem `auditOnly` na
+`false`. `NOT READY` zwraca kod `1`. Do samej diagnostyki plików i ACL podczas awarii API
+można świadomie pominąć kontrolę sieciową:
+
+```powershell
+.\deploy\gpo\Test-WazuhGpoReadiness.ps1 -SkipApiCheck -SkipWazuhCheck
+```
+
+Do izolowanej diagnostyki można użyć `-SkipApiCheck` lub `-SkipWazuhCheck`. Każdy z tych
+przełączników zwraca ostrzeżenie i nie stanowi pełnego dopuszczenia produkcyjnego. Po zmianie
+dowolnego sekretu albo ACL ponownie wykonaj pełną kontrolę bez przełączników pomijających.
 
 ## 4. Certyfikaty komputera
 
