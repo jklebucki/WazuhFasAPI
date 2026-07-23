@@ -100,8 +100,8 @@ curl -fsS https://wazuh.ad.citronex.pl:8443/openapi.json >/dev/null
 
 Swagger pokazuje dwa niezależne schematy w oknie **Authorize**:
 
-- `ClientApiKey` — nagłówek `X-API-Key` dla manifestu i wyszukiwania agenta;
-- `AdminApiKey` — nagłówek `X-Admin-API-Key` dla list agentów i grup.
+* `ClientApiKey` — nagłówek `X-API-Key` dla manifestu i wyszukiwania agenta;
+* `AdminApiKey` — nagłówek `X-Admin-API-Key` dla list agentów i grup.
 
 Klucze są przechowywane wyłącznie w pamięci bieżącej karty przeglądarki. Nie zapisuj ich
 w dokumentacji, adresach URL ani zrzutach ekranu. Centralny Nginx musi mieć wdrożoną bieżącą
@@ -222,3 +222,5 @@ centralnego Nginx ani Wazuh Managera.
 * 403: klient jest poza allowlistą centralnego Nginx;
 * TLS/CRL: sprawdź zaufanie do `ad-CERTSRV-CA` i dostępność CRL;
 * stale: Wazuh był chwilowo niedostępny, a odpowiedź zawiera historyczne `dataAsOf`.
+
+

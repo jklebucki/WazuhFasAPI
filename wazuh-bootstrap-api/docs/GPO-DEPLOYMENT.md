@@ -246,18 +246,133 @@ serwera plików. Nie wpisuj do niego wartości tajemnic. Pierwsze wdrożenie poz
 
 ## 6. Podpisanie PowerShell
 
-Wydaj administratorowi publikującemu certyfikat Code Signing z firmowego PKI. Certyfikat
-wydawcy i jego łańcuch rozprowadź do magazynów `Trusted Publishers` i odpowiednich CA komputerów.
-Podpisz finalną, niezmienną kopię:
+Poniższą procedurę wykonuj na kontrolerze domeny z podniesionego Windows PowerShell, używając
+konta uprawnionego do ręcznego enrollmentu z szablonu `CodeSigning`. Przyjęty katalog roboczy:
 
-```powershell
-$Certificate = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.NotAfter -gt (Get-Date).AddMonths(1) } | Select-Object -First 1
-Set-AuthenticodeSignature -FilePath '.\Install-WazuhAgent.ps1' -Certificate $Certificate -HashAlgorithm SHA256
+```text
+C:\Temp\GPO_Script
 ```
 
-Sprawdź `Status=Valid`. Każda zmiana skryptu unieważnia podpis i wymaga ponownego podpisania.
-Włącz `Computer Configuration > Administrative Templates > Windows Components > Windows PowerShell > Turn on Script Execution` jako **Allow only signed scripts** po potwierdzeniu
-dystrybucji zaufania.
+Nie kopiuj klucza prywatnego do SYSVOL ani na stacje robocze. Do komputerów domenowych trafia
+wyłącznie publiczny certyfikat wydawcy `WazuhScriptSigner.cer`.
+
+### 6.1. Uruchomienie firmowego urzędu certyfikacji
+
+Serwer `CERTSRV.ad.citronex.pl` jest normalnie wyłączony. Przed enrollmentem włącz maszynę
+fizyczną lub wirtualną z konsoli platformy, na której jest utrzymywana. Samo uruchomienie usługi
+nie włączy wyłączonego systemu. Po uruchomieniu serwera sprawdź DNS i port RPC:
+
+```powershell
+Resolve-DnsName 'CERTSRV.ad.citronex.pl' | Select-Object Name, IPAddress | Format-Table -AutoSize; Test-NetConnection 'CERTSRV.ad.citronex.pl' -Port 135
+```
+
+Jeżeli system działa, ale usługa CA jest zatrzymana, uruchom ją na serwerze certyfikatów:
+
+```powershell
+Start-Service -Name 'CertSvc'; Get-Service -Name 'CertSvc' | Select-Object Name, Status, StartType | Format-Table -AutoSize
+```
+
+Prawidłowym CA dla tej procedury jest:
+
+```text
+CERTSRV.ad.citronex.pl\ad-CERTSRV-CA
+```
+
+Pozostałe zarejestrowane w AD urzędy mogą mieć wygasłe certyfikaty. Przed użyciem CA potwierdź,
+że jego certyfikat jest aktualny:
+
+```powershell
+& { $RootDse = [ADSI]'LDAP://RootDSE'; $Base = [ADSI]("LDAP://CN=Enrollment Services,CN=Public Key Services,CN=Services," + [string]$RootDse.configurationNamingContext); $Searcher = [System.DirectoryServices.DirectorySearcher]::new($Base); $Searcher.Filter = '(&(objectClass=pKIEnrollmentService)(dNSHostName=CERTSRV.ad.citronex.pl))'; $Searcher.PropertiesToLoad.Add('cACertificate') | Out-Null; $Result = $Searcher.FindOne(); if ($null -eq $Result) { throw 'Nie znaleziono CA CERTSRV.ad.citronex.pl w AD.' }; $Certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([byte[]]$Result.Properties['cacertificate'][0]); [pscustomobject]@{ Subject = $Certificate.Subject; Issuer = $Certificate.Issuer; NotAfter = $Certificate.NotAfter; Thumbprint = $Certificate.Thumbprint; IsCurrentlyValid = ($Certificate.NotBefore -le (Get-Date) -and $Certificate.NotAfter -gt (Get-Date)) } | Format-List }
+```
+
+### 6.2. Publikacja szablonu i enrollment
+
+Opublikuj szablon po osiągnięciu dostępności RPC:
+
+```powershell
+certutil.exe -config 'CERTSRV.ad.citronex.pl\ad-CERTSRV-CA' -SetCATemplates +CodeSigning
+```
+
+Komunikat `Already present` oznacza, że szablon jest już opublikowany. Komunikat
+`Auto-Enroll: Access is denied` nie blokuje ręcznego enrollmentu. Wystaw certyfikat do osobistego
+magazynu bieżącego administratora i od razu zweryfikuj rezultat:
+
+```powershell
+& { Set-StrictMode -Version Latest; $ErrorActionPreference = 'Stop'; $Enrollment = Get-Certificate -Template 'CodeSigning' -CertStoreLocation 'Cert:\CurrentUser\My'; $Certificate = $Enrollment.Certificate; if ($Enrollment.Status -ne 'Issued' -or $null -eq $Certificate) { throw "Nie wystawiono certyfikatu Code Signing. Status=$($Enrollment.Status); Message=$($Enrollment.StatusMessage)" }; if (-not $Certificate.HasPrivateKey) { throw 'Wystawiony certyfikat nie ma dostępnego klucza prywatnego.' }; [pscustomobject]@{ Status = $Enrollment.Status; Subject = $Certificate.Subject; Thumbprint = $Certificate.Thumbprint; NotBefore = $Certificate.NotBefore; NotAfter = $Certificate.NotAfter; HasPrivateKey = $Certificate.HasPrivateKey; PresentInStore = (Test-Path -LiteralPath "Cert:\CurrentUser\My\$($Certificate.Thumbprint)") } | Format-List }
+```
+
+Klucz prywatny może i powinien być nieeksportowalny. Wbudowany, niezależny od języka systemu
+filtr pokaże wszystkie dostępne certyfikaty Code Signing:
+
+```powershell
+Get-ChildItem -Path Cert:\CurrentUser\My -CodeSigningCert | Select-Object Subject, Thumbprint, NotBefore, NotAfter, HasPrivateKey | Sort-Object NotBefore -Descending | Format-Table -AutoSize
+```
+
+### 6.3. Podpisanie i eksport publicznego certyfikatu
+
+Najpierw umieść finalny skrypt w `C:\Temp\GPO_Script\Install-WazuhAgent.ps1`. Polecenie wybiera
+najnowszy ważny certyfikat Code Signing, podpisuje skrypt algorytmem SHA-256 i eksportuje
+wyłącznie jego część publiczną:
+
+```powershell
+& { Set-StrictMode -Version Latest; $ErrorActionPreference = 'Stop'; $ScriptPath = 'C:\Temp\GPO_Script\Install-WazuhAgent.ps1'; $PublicCertificatePath = 'C:\Temp\GPO_Script\WazuhScriptSigner.cer'; $Signer = Get-ChildItem -Path Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.HasPrivateKey -and $_.NotBefore -le (Get-Date) -and $_.NotAfter -gt (Get-Date).AddMonths(1) } | Sort-Object NotBefore -Descending | Select-Object -First 1; if ($null -eq $Signer) { throw 'Brak ważnego przez co najmniej miesiąc certyfikatu Code Signing z kluczem prywatnym.' }; $Signature = Set-AuthenticodeSignature -LiteralPath $ScriptPath -Certificate $Signer -HashAlgorithm SHA256; Export-Certificate -Cert $Signer -FilePath $PublicCertificatePath -Type CERT -Force | Out-Null; [pscustomobject]@{ Status = $Signature.Status; StatusMessage = $Signature.StatusMessage; Script = $ScriptPath; Subject = $Signer.Subject; Thumbprint = $Signer.Thumbprint; CertificateNotAfter = $Signer.NotAfter; PublicCertificate = $PublicCertificatePath } | Format-List; if ($Signature.Status -ne 'Valid') { throw "Podpis nie jest prawidłowy: $($Signature.StatusMessage)" } }
+```
+
+Zweryfikuj podpis bez używania `$args[0]` w wyrażeniu formatującym, ponieważ nie wskazuje ono
+obiektu potoku i może błędnie wyświetlić puste `Subject` oraz `Thumbprint` mimo ważnego podpisu:
+
+```powershell
+& { $Signature = Get-AuthenticodeSignature -LiteralPath 'C:\Temp\GPO_Script\Install-WazuhAgent.ps1'; [pscustomobject]@{ Status = $Signature.Status; StatusMessage = $Signature.StatusMessage; Path = $Signature.Path; Subject = $Signature.SignerCertificate.Subject; Thumbprint = $Signature.SignerCertificate.Thumbprint; NotAfter = $Signature.SignerCertificate.NotAfter } | Format-List; if ($Signature.Status -ne 'Valid') { throw "Podpis nie jest prawidłowy: $($Signature.StatusMessage)" } }
+```
+
+Oczekiwanym wynikiem jest `Status: Valid`. Każda zmiana zawartości skryptu, w tym zmiana
+zakończeń linii po podpisaniu, unieważnia podpis i wymaga ponownego wykonania tej sekcji.
+
+### 6.4. Zaufanie do wydawcy i publikacja w GPO
+
+Zaimportuj `C:\Temp\GPO_Script\WazuhScriptSigner.cer` do GPO obejmującego komputery docelowe:
+
+```text
+Computer Configuration
+  Policies
+    Windows Settings
+      Security Settings
+        Public Key Policies
+          Trusted Publishers
+```
+
+Certyfikat `ad-CERTSRV-CA` umieść w `Trusted Root Certification Authorities`, jeżeli nie jest już
+dystrybuowany przez domenę. Do SYSVOL skopiuj podpisany `Install-WazuhAgent.ps1`, a nie jego
+wcześniejszą kopię. Na komputerze pilotażowym po `gpupdate.exe /force` sprawdź obecność wydawcy:
+
+```powershell
+Get-ChildItem -Path Cert:\LocalMachine\TrustedPublisher | Where-Object { $_.Thumbprint -eq '7578F8573173AD9D97AB4AEE4EA683B71405FB84' } | Select-Object Subject, Thumbprint, NotAfter | Format-List
+```
+
+Thumbprint w poleceniu pilotażowym jest wartością bieżącego certyfikatu wydanego 23 lipca 2026 r.
+Przy odnowieniu zastąp go thumbprintem pokazanym przez procedurę podpisywania.
+
+Włącz `Computer Configuration > Administrative Templates > Windows Components > Windows PowerShell > Turn on Script Execution` jako **Allow only signed scripts** dopiero po potwierdzeniu
+dystrybucji zaufania na komputerze pilotażowym. Nie używaj `-ExecutionPolicy Bypass`.
+
+### 6.5. Zakończenie pracy CA i odnowienie
+
+Po wystawieniu certyfikatu można usunąć tymczasową publikację szablonu, jeżeli taki jest przyjęty
+model bezpieczeństwa PKI:
+
+```powershell
+certutil.exe -config 'CERTSRV.ad.citronex.pl\ad-CERTSRV-CA' -SetCATemplates -CodeSigning
+```
+
+Usunięcie szablonu z CA nie unieważnia już wystawionego certyfikatu. Nie wyłączaj serwera, dopóki
+nie zakończą się operacje CA i nie zostanie wykonana wymagana w organizacji kopia zapasowa.
+Następnie zatrzymaj usługę `CertSvc` i wyłącz system zgodnie z procedurą utrzymania serwera.
+
+Bieżący certyfikat podpisujący wygasa 23 lipca 2027 r. Zaplanuj odnowienie co najmniej 30 dni
+wcześniej. Bez zaufanej usługi znakowania czasem podpis nie powinien być uznawany za trwały po
+wygaśnięciu certyfikatu. Procedura odnowienia obejmuje uruchomienie CA, ponowne opublikowanie
+szablonu, enrollment, podpisanie aktualnej kopii skryptu i wdrożenie nowego publicznego
+certyfikatu do `Trusted Publishers` przed zastąpieniem skryptu w SYSVOL.
 
 ## 7. Konfiguracja skryptu startowego
 
