@@ -99,6 +99,18 @@ curl -fsS \
 
 Nie używaj `-k` w produkcyjnych konsumentach. Komputery domenowe powinny ufać firmowemu CA.
 
+## Agent Windows przez GPO
+
+`deploy/gpo/Install-WazuhAgent.ps1` jest idempotentnym skryptem startowym dla komputerów AD.
+Instaluje, naprawia lub aktualizuje agenta na podstawie manifestu, zachowuje lokalną tożsamość,
+weryfikuje SHA-256 i Authenticode oraz odmawia automatycznego enrollmentu przy konflikcie nazwy.
+Konfiguracja przykładowa startuje w trybie `auditOnly=true`; tajemnice są odczytywane z osobnego,
+chronionego udziału dostępnego dla kont komputerów i nigdy nie trafiają do SYSVOL.
+
+Procedura pilota, podpisania PowerShell, konfiguracji GPMC, ACL udziału i aktywacji znajduje się
+w [instrukcji wdrożenia GPO](docs/GPO-DEPLOYMENT.md). Kontrolowaną macierz awarii i procedurę
+odtworzeniową opisuje [instrukcja testów destrukcyjnych](docs/GPO-TESTING.md).
+
 ## Aktualizacja i rollback
 
 `sudo ./scripts/install.sh --upgrade` najpierw wykonuje bezpieczne `git pull --ff-only` jako
@@ -127,3 +139,5 @@ wdrożeniom offline. Pełne logi instalatora są zapisywane jako pliki root-only
 - [Bezpieczeństwo](docs/SECURITY.md)
 - [RBAC Wazuh](docs/WAZUH-RBAC.md)
 - [Konsument GPO](docs/GPO-CONSUMER.md)
+- [Wdrożenie agenta Windows przez GPO](docs/GPO-DEPLOYMENT.md)
+- [Testy destrukcyjne agenta Windows](docs/GPO-TESTING.md)
