@@ -1,8 +1,8 @@
 # Konsument GPO dla Windows
 
-Produkcyjny skrypt znajduje się w `deploy/gpo/Install-WazuhAgent.ps1`, a jego konfiguracja
-w `deploy/gpo/WazuhAgentGpo.config.example.json`. Pełną procedurę publikacji przez Active
-Directory opisuje [GPO-DEPLOYMENT.md](GPO-DEPLOYMENT.md).
+Produkcyjny skrypt wraz z nietajną konfiguracją znajduje się w
+`deploy/gpo/Install-WazuhAgent.ps1`. Pełną procedurę publikacji przez Active Directory opisuje
+[GPO-DEPLOYMENT.md](GPO-DEPLOYMENT.md).
 
 ## Granica zaufania
 
@@ -10,7 +10,7 @@ Bootstrap API informuje, czy rekord nazwy komputera istnieje w managerze, ale ni
 że lokalny `client.keys` odpowiada temu rekordowi. API nie udostępnia kluczy i nie wykonuje
 enrollmentu. Skrypt GPO respektuje tę granicę i nigdy nie pobiera `client.keys` z managera.
 
-Skrypt korzysta z dwóch tajemnic przechowywanych poza kodem, JSON-em i SYSVOL:
+Skrypt korzysta z dwóch tajemnic przechowywanych poza kodem i SYSVOL:
 
 - klucz `X-API-Key` tylko do odczytu manifestu i stanu własnej nazwy komputera;
 - hasło enrollmentu Wazuh, używane wyłącznie, gdy komputer nie ma klucza i manager nie ma
@@ -20,7 +20,7 @@ Pliki są odczytywane przez konto komputera z chronionego udziału SMB. Hasło e
 jest przekazywane w argumentach `msiexec`; skrypt zapisuje je tymczasowo jako chroniony
 `authd.pass`, oczekuje na utworzenie prawidłowego `client.keys`, a następnie usuwa plik hasła.
 Aktywne uruchomienie usuwa również osierocony `authd.pass` pozostawiony przez awarię zasilania
-lub przerwanie poprzedniej próby; tryb `auditOnly` nie modyfikuje plików.
+lub przerwanie poprzedniej próby; tryb `$script:AuditOnly = $true` nie modyfikuje plików.
 
 ## Macierz decyzji
 
@@ -45,8 +45,8 @@ dowód zgodności z wpisem managera; skrypt nie loguje ani nie przesyła zawarto
 Przed `msiexec` skrypt:
 
 1. akceptuje tylko HTTPS;
-2. zezwala wyłącznie na hosty z `allowedDownloadHosts`, także po każdym przekierowaniu;
-3. domyślnie wymaga SHA-256 zwróconego przez manifest;
+2. zezwala wyłącznie na hosty z `$script:AllowedDownloadHosts`, także po każdym przekierowaniu;
+3. zawsze wymaga SHA-256 zwróconego przez manifest;
 4. wymaga poprawnego podpisu Authenticode i zgodnego podmiotu certyfikatu;
 5. używa chronionego katalogu roboczego w `%ProgramData%`;
 6. zachowuje `client.keys` i poprawny `ossec.conf` podczas reinstalacji lub aktualizacji;

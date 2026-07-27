@@ -111,7 +111,7 @@ automatycznego enrollmentu przy konflikcie nazwy. Ponowne uruchomienie po przerw
 częściową instalację; pusty lub nieprawidłowy `client.keys` nie jest przywracany jako kopia
 tożsamości.
 
-Konfiguracja przykładowa startuje w trybie `auditOnly=true`; tajemnice są odczytywane z osobnego,
+Nietajna konfiguracja jest osadzona na początku skryptu; tajemnice są odczytywane z osobnego,
 chronionego udziału dostępnego dla kont komputerów i nigdy nie trafiają do SYSVOL. Przed
 aktywacją użyj [Test-WazuhGpoReadiness.ps1](deploy/gpo/Test-WazuhGpoReadiness.ps1), który
 kontroluje udział, ACL, poświadczenia FastAPI i hasło enrollmentu Wazuh.

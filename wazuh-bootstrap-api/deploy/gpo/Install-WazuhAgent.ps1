@@ -8,22 +8,29 @@ Idempotent Wazuh agent installation, repair, and upgrade for an AD computer star
 Uses the read-only Wazuh Bootstrap API as the source of the target version and manager
 configuration. It never retrieves or guesses client.keys. Fresh enrollment is allowed only
 when the manager has no record for the computer and a separately protected enrollment password
-file is available. Secrets are never written to this script, its JSON configuration, logs, or
-the msiexec command line.
+file is available. Secrets are never written to this script, logs, or the msiexec command line.
 #>
 
 [CmdletBinding()]
-param(
-    [Parameter()]
-    [ValidateNotNullOrEmpty()]
-    [string]$ConfigPath = (Join-Path $PSScriptRoot 'WazuhAgentGpo.config.json')
-)
+param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Net.Http
+
+# Deployment configuration. Keep secrets in the protected files referenced below.
+$script:BootstrapApiUrl = 'https://wazuh.ad.citronex.pl:8443'
+$script:ApiKeyFile = '\\fssrv.ad.citronex.pl\WazuhDeployment$\client-api-key.txt'
+$script:EnrollmentPasswordFile = '\\fssrv.ad.citronex.pl\WazuhDeployment$\enrollment-password.txt'
+$script:AllowedDownloadHosts = @('packages.wazuh.com')
+$script:AuditOnly = $false
+$script:ForceRepair = $false
+$script:ApiRetryCount = 6
+$script:ApiRetryDelaySeconds = 10
+$script:EnrollmentTimeoutSeconds = 120
+$script:LogDirectory = 'C:\ProgramData\Citronex\WazuhBootstrap\Logs'
 
 $script:LogFile = $null
 $script:RebootRequired = $false
@@ -112,91 +119,75 @@ function Write-DeploymentLog {
     }
 }
 
-function Get-RequiredProperty {
+function Get-GpoConfiguration {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][psobject]$Object,
-        [Parameter(Mandatory)][string]$Name
-    )
+    param()
 
-    $property = $Object.PSObject.Properties[$Name]
-    if ($null -eq $property -or $null -eq $property.Value -or
-        [string]::IsNullOrWhiteSpace([string]$property.Value)) {
-        throw "Missing required configuration property: $Name"
+    return [pscustomobject]@{
+        BootstrapApiUrl = $script:BootstrapApiUrl
+        ApiKeyFile = $script:ApiKeyFile
+        EnrollmentPasswordFile = $script:EnrollmentPasswordFile
+        AllowedDownloadHosts = @($script:AllowedDownloadHosts)
+        AuditOnly = $script:AuditOnly
+        ForceRepair = $script:ForceRepair
+        ApiRetryCount = $script:ApiRetryCount
+        ApiRetryDelaySeconds = $script:ApiRetryDelaySeconds
+        EnrollmentTimeoutSeconds = $script:EnrollmentTimeoutSeconds
+        LogDirectory = $script:LogDirectory
     }
-    return $property.Value
 }
 
-function Get-OptionalProperty {
+function ConvertTo-GpoConfiguration {
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][psobject]$Object,
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter()][AllowNull()][object]$DefaultValue = $null
-    )
+    param([Parameter(Mandatory)][psobject]$Configuration)
 
-    $property = $Object.PSObject.Properties[$Name]
-    if ($null -eq $property -or $null -eq $property.Value) {
-        return $DefaultValue
+    foreach ($name in @('BootstrapApiUrl', 'ApiKeyFile', 'AllowedDownloadHosts',
+            'AuditOnly', 'ForceRepair', 'ApiRetryCount', 'ApiRetryDelaySeconds',
+            'EnrollmentTimeoutSeconds', 'LogDirectory')) {
+        if ($null -eq $Configuration.PSObject.Properties[$name]) {
+            throw "Missing required configuration property: $name"
+        }
     }
-    return $property.Value
-}
 
-function Read-GpoConfiguration {
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$LiteralPath)
-
-    if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
-        throw "Configuration file does not exist: $LiteralPath"
-    }
-    $configuration = Get-Content -LiteralPath $LiteralPath -Raw -Encoding UTF8 |
-        ConvertFrom-Json
-
-    $apiUri = [Uri](Get-RequiredProperty -Object $configuration -Name 'bootstrapApiUrl')
+    $apiUri = [Uri][string]$Configuration.BootstrapApiUrl
     if (-not $apiUri.IsAbsoluteUri -or $apiUri.Scheme -ne 'https') {
-        throw 'bootstrapApiUrl must be an absolute HTTPS URL.'
+        throw 'BootstrapApiUrl must be an absolute HTTPS URL.'
     }
 
-    $allowedHosts = @(Get-RequiredProperty -Object $configuration -Name 'allowedDownloadHosts')
+    if ([string]::IsNullOrWhiteSpace([string]$Configuration.ApiKeyFile)) {
+        throw 'ApiKeyFile must not be empty.'
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Configuration.LogDirectory)) {
+        throw 'LogDirectory must not be empty.'
+    }
+
+    $allowedHosts = @($Configuration.AllowedDownloadHosts)
     if ($allowedHosts.Count -eq 0) {
-        throw 'allowedDownloadHosts must contain at least one DNS name.'
+        throw 'AllowedDownloadHosts must contain at least one DNS name.'
     }
     foreach ($hostName in $allowedHosts) {
         if ([string]$hostName -notmatch '^[A-Za-z0-9.-]+$') {
             throw "Invalid allowed download host: $hostName"
         }
     }
-    $agentGroup = [string](Get-OptionalProperty -Object $configuration `
-        -Name 'agentGroup' -DefaultValue '')
-    if (-not [string]::IsNullOrWhiteSpace($agentGroup) -and
-        $agentGroup -notmatch '^[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*$') {
-        throw 'agentGroup contains unsupported characters.'
-    }
 
     return [pscustomobject]@{
         BootstrapApiUrl = $apiUri.AbsoluteUri.TrimEnd('/')
-        ApiKeyFile = [string](Get-RequiredProperty -Object $configuration -Name 'apiKeyFile')
-        EnrollmentPasswordFile = [string](Get-OptionalProperty -Object $configuration `
-            -Name 'enrollmentPasswordFile' -DefaultValue '')
-        AgentGroup = $agentGroup
+        ApiKeyFile = [string]$Configuration.ApiKeyFile
+        EnrollmentPasswordFile = if ($null -eq
+            $Configuration.PSObject.Properties['EnrollmentPasswordFile']) {
+            ''
+        }
+        else {
+            [string]$Configuration.EnrollmentPasswordFile
+        }
         AllowedDownloadHosts = @($allowedHosts | ForEach-Object { ([string]$_).ToLowerInvariant() })
-        AllowedSignerSubjectRegex = [string](Get-OptionalProperty -Object $configuration `
-            -Name 'allowedSignerSubjectRegex' -DefaultValue '(?i)\bWazuh\b')
-        RequireManifestSha256 = [bool](Get-OptionalProperty -Object $configuration `
-            -Name 'requireManifestSha256' -DefaultValue $true)
-        AuditOnly = [bool](Get-OptionalProperty -Object $configuration `
-            -Name 'auditOnly' -DefaultValue $true)
-        ForceRepair = [bool](Get-OptionalProperty -Object $configuration `
-            -Name 'forceRepair' -DefaultValue $false)
-        ApiRetryCount = [int](Get-OptionalProperty -Object $configuration `
-            -Name 'apiRetryCount' -DefaultValue 6)
-        ApiRetryDelaySeconds = [int](Get-OptionalProperty -Object $configuration `
-            -Name 'apiRetryDelaySeconds' -DefaultValue 10)
-        EnrollmentTimeoutSeconds = [int](Get-OptionalProperty -Object $configuration `
-            -Name 'enrollmentTimeoutSeconds' -DefaultValue 120)
-        LogDirectory = [string](Get-OptionalProperty -Object $configuration `
-            -Name 'logDirectory' `
-            -DefaultValue (Join-Path $env:ProgramData 'Citronex\WazuhBootstrap\Logs'))
+        AuditOnly = [bool]$Configuration.AuditOnly
+        ForceRepair = [bool]$Configuration.ForceRepair
+        ApiRetryCount = [int]$Configuration.ApiRetryCount
+        ApiRetryDelaySeconds = [int]$Configuration.ApiRetryDelaySeconds
+        EnrollmentTimeoutSeconds = [int]$Configuration.EnrollmentTimeoutSeconds
+        LogDirectory = [string]$Configuration.LogDirectory
     }
 }
 
@@ -1003,10 +994,10 @@ function Test-DomainComputerContext {
 
 function Invoke-WazuhAgentDeployment {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$ConfigurationPath)
+    param([Parameter(Mandatory)][psobject]$Configuration)
 
     $script:CurrentFailureExitCode = $script:ExitCodes.Configuration
-    $configuration = Read-GpoConfiguration -LiteralPath $ConfigurationPath
+    $configuration = ConvertTo-GpoConfiguration -Configuration $Configuration
     Initialize-DeploymentLog -Directory $configuration.LogDirectory
     Write-DeploymentLog -Level INFO -Message 'Wazuh GPO deployment started.'
     Test-DomainComputerContext
@@ -1110,7 +1101,7 @@ function Invoke-WazuhAgentDeployment {
     $installedVersion = Get-InstalledAgentVersion
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     $executableHealthy = Test-InstalledAgentExecutable -LiteralPath $executablePath `
-        -AllowedSignerSubjectRegex $configuration.AllowedSignerSubjectRegex
+        -AllowedSignerSubjectRegex '(?i)\bWazuh\b'
     $configurationHealthy = Test-LocalAgentConfiguration -LiteralPath $configFilePath
     $installationFilesHealthy = $executableHealthy -and $configurationHealthy
     $operation = 'None'
@@ -1177,8 +1168,8 @@ function Invoke-WazuhAgentDeployment {
                 -Destination $msiPath -AllowedHosts $configuration.AllowedDownloadHosts
             Test-AgentPackage -LiteralPath $msiPath `
                 -ExpectedSha256 ([string]$manifest.targetAgent.sha256) `
-                -RequireSha256 $configuration.RequireManifestSha256 `
-                -AllowedSignerSubjectRegex $configuration.AllowedSignerSubjectRegex
+                -RequireSha256 $true `
+                -AllowedSignerSubjectRegex '(?i)\bWazuh\b'
 
             $backupFiles = @()
             if (Test-Path -LiteralPath $installDirectory -PathType Container) {
@@ -1205,9 +1196,6 @@ function Invoke-WazuhAgentDeployment {
                 $properties['WAZUH_REGISTRATION_PORT'] = `
                     [string]$registrationPort
                 $properties['WAZUH_AGENT_NAME'] = $env:COMPUTERNAME
-                if (-not [string]::IsNullOrWhiteSpace($configuration.AgentGroup)) {
-                    $properties['WAZUH_AGENT_GROUP'] = $configuration.AgentGroup
-                }
             }
 
             try {
@@ -1304,7 +1292,7 @@ function Invoke-WazuhAgentDeployment {
 
 function Invoke-Main {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$ConfigurationPath)
+    param([Parameter()][AllowNull()][psobject]$Configuration = $null)
 
     $mutex = New-Object Threading.Mutex($false, 'Global\Citronex.WazuhAgent.Gpo')
     $hasMutex = $false
@@ -1313,7 +1301,10 @@ function Invoke-Main {
         if (-not $hasMutex) {
             return $script:ExitCodes.Success
         }
-        return Invoke-WazuhAgentDeployment -ConfigurationPath $ConfigurationPath
+        if ($null -eq $Configuration) {
+            $Configuration = Get-GpoConfiguration
+        }
+        return Invoke-WazuhAgentDeployment -Configuration $Configuration
     }
     catch {
         $statusCode = 0
@@ -1338,5 +1329,5 @@ function Invoke-Main {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
-    exit (Invoke-Main -ConfigurationPath $ConfigPath)
+    exit (Invoke-Main)
 }

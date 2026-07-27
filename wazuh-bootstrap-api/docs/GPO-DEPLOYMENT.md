@@ -93,9 +93,10 @@ a następnie podłączanie go do kolejnych OU. Nie łącz tego GPO z OU `Domain 
 
 ## 3. Chroniony udział z tajemnicami
 
-Nie zapisuj klucza API ani hasła enrollmentu w skrypcie, JSON-ie, GPP, SYSVOL lub parametrach
-GPO. Rekomendowany jest ukryty udział na serwerze plików, nie dodatkowa rola na kontrolerze
-domeny. Konto komputera odczytuje pliki przez Kerberos.
+Nie zapisuj klucza API ani hasła enrollmentu w skrypcie, GPP, SYSVOL lub parametrach GPO.
+Skrypt zawiera wyłącznie ścieżki do tajemnic. Rekomendowany jest ukryty udział na serwerze
+plików, nie dodatkowa rola na kontrolerze domeny. Konto komputera odczytuje pliki przez
+Kerberos.
 
 Przykład na serwerze `fssrv.ad.citronex.pl`:
 
@@ -195,7 +196,7 @@ Tryb `--challenge` akceptuje wyłącznie 64 znaki szesnastkowe i odrzuca wszystk
 zmieniające ścieżki. Plik checkera i cały katalog `/opt/wazuh-bootstrap-api` muszą pozostać
 własnością `root` i nie mogą być zapisywalne przez `jklebucki`.
 
-Wynik końcowy `READY` i kod procesu `0` są wymagane przed przełączeniem `auditOnly` na
+Wynik końcowy `READY` i kod procesu `0` są wymagane przed przełączeniem `$script:AuditOnly` na
 `false`. `NOT READY` zwraca kod `1`. Do samej diagnostyki plików i ACL podczas awarii API
 można świadomie pominąć kontrolę sieciową:
 
@@ -223,26 +224,24 @@ Computer Configuration
 Zaimportuj root CA, a pośrednie CA umieść w `Intermediate Certification Authorities`. Nie
 wyłączaj kontroli certyfikatów i nie używaj `-SkipCertificateCheck`.
 
-## 5. Publikacja skryptu i JSON w SYSVOL
+## 5. Konfiguracja i publikacja skryptu w SYSVOL
 
 W konsoli GPMC utwórz GPO `Citronex - Wazuh Agent Bootstrap`. Otwórz katalog skryptów przez
-przycisk **Show Files** w ustawieniach Startup i utwórz podkatalog `WazuhAgent`. Skopiuj do niego:
+przycisk **Show Files** w ustawieniach Startup i utwórz podkatalog `WazuhAgent`.
 
-```text
-Install-WazuhAgent.ps1
-WazuhAgentGpo.config.json
+Przed podpisaniem skryptu sprawdź blok `Deployment configuration` na jego początku, zwłaszcza
+adres API oraz ścieżki udziału z tajemnicami. Nie wpisuj do skryptu wartości tajemnic. Pierwsze
+wdrożenie ustaw z:
+
+```powershell
+$script:AuditOnly = $true
+$script:ForceRepair = $false
 ```
 
-JSON utwórz z `deploy/gpo/WazuhAgentGpo.config.example.json`, zmieniając co najmniej nazwę
-serwera plików. Nie wpisuj do niego wartości tajemnic. Pierwsze wdrożenie pozostaw z:
-
-```json
-"auditOnly": true,
-"requireManifestSha256": true,
-"forceRepair": false
-```
-
-`forceRepair=true` służy wyłącznie kontrolowanej akcji naprawczej, nie stałej polityce.
+Wymaganie SHA-256 i kontrola podpisu Wazuh są stałymi zasadami skryptu, a nie opcjami
+konfiguracyjnymi. `$script:ForceRepair = $true` służy wyłącznie kontrolowanej akcji naprawczej,
+nie stałej polityce. Po skonfigurowaniu wykonaj podpisanie opisane w sekcji 6, a następnie
+skopiuj do SYSVOL tylko finalny `Install-WazuhAgent.ps1`.
 
 ## 6. Podpisanie PowerShell
 
@@ -387,11 +386,8 @@ Computer Configuration
           PowerShell Scripts
 ```
 
-Dodaj `Install-WazuhAgent.ps1` i parametr wskazujący JSON z tego samego katalogu, np.:
-
-```text
--ConfigPath "\\ad.citronex.pl\SYSVOL\ad.citronex.pl\Policies\{GPO-GUID}\Machine\Scripts\Startup\WazuhAgent\WazuhAgentGpo.config.json"
-```
+Dodaj `Install-WazuhAgent.ps1` bez parametrów. Cała nietajna konfiguracja wdrożenia jest
+osadzona na początku podpisanego skryptu.
 
 Nie używaj `-ExecutionPolicy Bypass`. W ustawieniach zasad włącz również:
 
@@ -424,7 +420,7 @@ Ponieważ jest to Startup Script, test wykonaj po restarcie komputera.
 
 ## 9. Faza audit-only
 
-Przy `auditOnly=true` skrypt:
+Przy `$script:AuditOnly = $true` skrypt:
 
 * pobiera manifest i stan rekordu;
 * ocenia lokalną wersję, usługę i klucz;
@@ -443,15 +439,15 @@ braku klucza przy istniejącym rekordzie managera.
 
 ## 10. Aktywacja zmian
 
-Po zaakceptowaniu pilota ustaw w JSON:
+Po zaakceptowaniu pilota ustaw w skrypcie:
 
-```json
-"auditOnly": false
+```powershell
+$script:AuditOnly = $false
 ```
 
-Podpis PowerShell nie zmienia się, ponieważ JSON nie jest wykonywalny i nie zawiera sekretów.
-Rozszerzaj linkowanie GPO z testowego OU na kolejne OU etapami. Monitoruj lokalne logi, stan
-`WazuhSvc`, ruch 1515 i nowe rekordy w managerze.
+Każda zmiana konfiguracji zmienia zawartość skryptu, dlatego po tej zmianie podpisz go ponownie
+i dopiero potem zastąp kopię w SYSVOL. Rozszerzaj linkowanie GPO z testowego OU na kolejne OU
+etapami. Monitoruj lokalne logi, stan `WazuhSvc`, ruch 1515 i nowe rekordy w managerze.
 
 Skrypt zachowuje poprawny `client.keys` i nie wykonuje downgrade'u. Naprawa uszkodzonej
 instalacji tej samej wersji może wykonać kontrolowane odinstalowanie i ponowną instalację
@@ -464,7 +460,7 @@ Najczęstsze przypadki:
 
 * kod 20: zaufanie TLS, klucz API, DNS, proxy lub chwilowa niedostępność API;
 * kod 30: rekord managera istnieje bez lokalnego klucza albo duplikat nazwy;
-* brak instalacji w audycie: `auditOnly` nadal ma wartość `true`;
+* brak instalacji w audycie: `$script:AuditOnly` nadal ma wartość `$true`;
 * kod 40 przy paczce: brak SHA-256, niedozwolony host, podpis lub CRL;
 * kod 50: zabezpieczony katalog roboczy i `msiexec.log` pozostają w `%ProgramData%`;
 * kod 60: usługa, lokalny klucz lub enrollment;

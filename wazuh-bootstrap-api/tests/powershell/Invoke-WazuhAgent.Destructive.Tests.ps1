@@ -307,19 +307,16 @@ function New-TestConfiguration {
 
     $path = Join-Path $RunRoot "$Name.config.json"
     $configuration = [ordered]@{
-        bootstrapApiUrl = 'https://wazuh.ad.citronex.pl:8443'
-        apiKeyFile = $ApiKeyFile
-        enrollmentPasswordFile = ''
-        agentGroup = ''
-        allowedDownloadHosts = @('packages.wazuh.com')
-        allowedSignerSubjectRegex = '(?i)\bWazuh\b'
-        requireManifestSha256 = $true
-        auditOnly = $AuditOnly
-        forceRepair = $ForceRepair
-        apiRetryCount = 2
-        apiRetryDelaySeconds = 1
-        enrollmentTimeoutSeconds = 30
-        logDirectory = (Join-Path $RunRoot 'deployment-logs')
+        BootstrapApiUrl = 'https://wazuh.ad.citronex.pl:8443'
+        ApiKeyFile = $ApiKeyFile
+        EnrollmentPasswordFile = ''
+        AllowedDownloadHosts = @('packages.wazuh.com')
+        AuditOnly = $AuditOnly
+        ForceRepair = $ForceRepair
+        ApiRetryCount = 2
+        ApiRetryDelaySeconds = 1
+        EnrollmentTimeoutSeconds = 30
+        LogDirectory = (Join-Path $RunRoot 'deployment-logs')
     }
     $configuration | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath $path -Encoding UTF8
@@ -335,8 +332,19 @@ function Invoke-Deployment {
 
     $outputPath = Join-Path $RunRoot "$Scenario.console.log"
     $errorPath = Join-Path $RunRoot "$Scenario.console.err.log"
+    $runnerPath = Join-Path $RunRoot "$Scenario.runner.ps1"
+    $deploymentLiteral = $DeploymentScript.Replace("'", "''")
+    $configurationLiteral = $Configuration.Replace("'", "''")
+    $runner = @"
+`$configuration = Get-Content -LiteralPath '$configurationLiteral' -Raw -Encoding UTF8 |
+    ConvertFrom-Json
+. '$deploymentLiteral'
+exit (Invoke-Main -Configuration `$configuration)
+"@
+    Set-Content -LiteralPath $runnerPath -Value $runner -Encoding UTF8
+    Protect-TestPath -LiteralPath $runnerPath
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File',
-        ('"{0}"' -f $DeploymentScript), '-ConfigPath', ('"{0}"' -f $Configuration))
+        ('"{0}"' -f $runnerPath))
     $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') `
         -ArgumentList ($arguments -join ' ') -Wait -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $outputPath -RedirectStandardError $errorPath

@@ -166,13 +166,17 @@ Describe 'Install-WazuhAgent input hardening' {
 }
 
 Describe 'Install-WazuhAgent configuration' {
-    It 'loads the production example without secret values' {
-        $path = Join-Path $projectRoot 'deploy\gpo\WazuhAgentGpo.config.example.json'
-        $configuration = Read-GpoConfiguration -LiteralPath $path
+    It 'provides valid embedded production settings without secret values' {
+        $configuration = ConvertTo-GpoConfiguration -Configuration (Get-GpoConfiguration)
         $configuration.BootstrapApiUrl | Should Be 'https://wazuh.ad.citronex.pl:8443'
-        $configuration.RequireManifestSha256 | Should Be $true
-        $configuration.AuditOnly | Should Be $true
+        $configuration.AuditOnly | Should Be $false
         ($configuration.AllowedDownloadHosts -contains 'packages.wazuh.com') | Should Be $true
+    }
+
+    It 'rejects invalid embedded settings' {
+        $configuration = Get-GpoConfiguration
+        $configuration.BootstrapApiUrl = 'http://wazuh.example'
+        Assert-Throws { ConvertTo-GpoConfiguration -Configuration $configuration }
     }
 }
 
@@ -192,5 +196,11 @@ Describe 'Install-WazuhAgent static secret safety' {
         $source | Should Match 'Get-FileHash'
         $source | Should Match 'Removed a stale enrollment password file'
         $source | Should Match 'Stop-AgentService -ServiceName'
+    }
+
+    It 'does not depend on an external GPO configuration file' {
+        $source = Get-Content -LiteralPath $scriptPath -Raw
+        $source | Should Not Match 'ConfigPath'
+        $source | Should Not Match 'WazuhAgentGpo\.config'
     }
 }
