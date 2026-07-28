@@ -50,6 +50,8 @@ Pełny przebieg obejmuje:
 - zatrzymaną i wyłączoną usługę;
 - osierocony `authd.pass`;
 - nieprawidłowe ID, nazwę hosta i wiele rekordów w `client.keys`;
+- kwalifikację starego `disconnected` i `never_connected` do kontrolowanego re-enrollmentu;
+- odmowę re-enrollmentu rekordu aktywnego, świeżego lub z niewiarygodnymi datami;
 - brakujący i pusty `ossec.conf`;
 - brakujący i uszkodzony plik wykonywalny;
 - brak usługi i nieprawidłową ścieżkę binarną usługi;

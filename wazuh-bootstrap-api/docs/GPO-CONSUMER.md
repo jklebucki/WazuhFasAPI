@@ -13,8 +13,9 @@ enrollmentu. Skrypt GPO respektuje tę granicę i nigdy nie pobiera `client.keys
 Skrypt korzysta z dwóch tajemnic przechowywanych poza kodem i SYSVOL:
 
 - klucz `X-API-Key` tylko do odczytu manifestu i stanu własnej nazwy komputera;
-- hasło enrollmentu Wazuh, używane wyłącznie, gdy komputer nie ma klucza i manager nie ma
-  rekordu tej nazwy.
+- hasło enrollmentu Wazuh, używane wyłącznie, gdy komputer nie ma klucza, a manager nie ma
+  rekordu tej nazwy albo ma dokładnie jeden rekord spełniający kontrolowaną politykę
+  re-enrollmentu.
 
 Pliki są odczytywane przez konto komputera z chronionego udziału SMB. Hasło enrollmentu nie
 jest przekazywane w argumentach `msiexec`; skrypt zapisuje je tymczasowo jako chroniony
@@ -30,7 +31,9 @@ lub przerwanie poprzedniej próby; tryb `$script:AuditOnly = $true` nie modyfiku
 | poprawny `client.keys`, wersja starsza | dowolny jednoznaczny | kopia klucza i konfiguracji, aktualizacja MSI, odtworzenie, start |
 | poprawny `client.keys`, brak/uszkodzenie EXE lub konfiguracji | dowolny jednoznaczny | chroniona kopia tożsamości, kontrolowana reinstalacja MSI, odtworzenie, start |
 | poprawny `client.keys`, brak lub błędna rejestracja usługi | dowolny jednoznaczny | odtworzenie usługi z poprawną ścieżką i kontem `LocalSystem`, start |
-| brak/poprawności klucza | rekord istnieje | kod 30, ręczna rekonsyliacja; brak enrollmentu |
+| brak/poprawności klucza | jeden rekord `disconnected` od co najmniej skonfigurowanego progu, wystarczająco stary | naprawa/instalacja i kontrolowany re-enrollment; ostateczna decyzja należy do `wazuh-authd` |
+| brak/poprawności klucza | jeden odpowiednio stary rekord `never_connected` | naprawa/instalacja i kontrolowany re-enrollment |
+| brak/poprawności klucza | rekord aktywny, świeży, z nieznanym statusem albo niewiarygodnymi datami | kod 30, ręczna rekonsyliacja; brak enrollmentu |
 | brak/poprawności klucza | duplikaty (`409`) | kod 30, ręczne usunięcie konfliktu |
 | brak/poprawności klucza | rekord nie istnieje | instalacja/naprawa i enrollment z chronionym hasłem |
 | dane API oznaczone `stale=true` | dowolny | brak mutacji, błąd kontrolowany |
@@ -39,6 +42,17 @@ lub przerwanie poprzedniej próby; tryb `$script:AuditOnly = $true` nie modyfiku
 Za strukturalnie poprawny uznawany jest dokładnie jeden rekord `client.keys`, z ID innym niż
 `000` i nazwą równą `%COMPUTERNAME%` bez uwzględniania wielkości liter. To nadal nie jest
 dowód zgodności z wpisem managera; skrypt nie loguje ani nie przesyła zawartości klucza.
+
+Polityka jest osadzona w skrypcie jako `$script:AllowStaleAgentReenrollment` oraz
+`$script:StaleAgentReenrollmentMinutes`. Kwalifikacja wymaga świeżej odpowiedzi API, dokładnie
+jednego rekordu, statusu `disconnected` albo `never_connected`, poprawnego `dateAdded` oraz —
+dla `disconnected` — poprawnego `lastKeepAlive`. Czasy są porównywane z `dataAsOf` zwróconym
+przez API, nie z lokalnym zegarem endpointu. Aktywny i świeży rekord zawsze jest chroniony.
+
+Skrypt nie usuwa rekordu przez Bootstrap API i nie otrzymuje uprawnień modyfikujących Wazuh.
+Po kwalifikacji wykonuje zwykły enrollment z hasłem, a managerowy `wazuh-authd` stosuje własne
+warunki `<force>`. Jeśli polityka managera jest bardziej restrykcyjna, enrollment nie powiedzie
+się i skrypt zachowa chronione logi diagnostyczne.
 
 ## Zabezpieczenia pakietu MSI
 

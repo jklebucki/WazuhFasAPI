@@ -6,9 +6,11 @@ Idempotent Wazuh agent installation, repair, and upgrade for an AD computer star
 
 .DESCRIPTION
 Uses the read-only Wazuh Bootstrap API as the source of the target version and manager
-configuration. It never retrieves or guesses client.keys. Fresh enrollment is allowed only
-when the manager has no record for the computer and a separately protected enrollment password
-file is available. Secrets are never written to this script, logs, or the msiexec command line.
+configuration. It never retrieves or guesses client.keys. Enrollment is allowed when the
+manager has no record for the computer or when one unambiguous record satisfies the embedded
+stale-agent policy and the manager's authd force policy. A separately protected enrollment
+password file is required. Secrets are never written to this script, logs, or the msiexec
+command line.
 #>
 
 [CmdletBinding()]
@@ -30,6 +32,8 @@ $script:ForceRepair = $false
 $script:ApiRetryCount = 6
 $script:ApiRetryDelaySeconds = 10
 $script:EnrollmentTimeoutSeconds = 120
+$script:AllowStaleAgentReenrollment = $true
+$script:StaleAgentReenrollmentMinutes = 60
 $script:LogDirectory = 'C:\ProgramData\Citronex\WazuhBootstrap\Logs'
 
 $script:LogFile = $null
@@ -133,6 +137,8 @@ function Get-GpoConfiguration {
         ApiRetryCount = $script:ApiRetryCount
         ApiRetryDelaySeconds = $script:ApiRetryDelaySeconds
         EnrollmentTimeoutSeconds = $script:EnrollmentTimeoutSeconds
+        AllowStaleAgentReenrollment = $script:AllowStaleAgentReenrollment
+        StaleAgentReenrollmentMinutes = $script:StaleAgentReenrollmentMinutes
         LogDirectory = $script:LogDirectory
     }
 }
@@ -143,7 +149,8 @@ function ConvertTo-GpoConfiguration {
 
     foreach ($name in @('BootstrapApiUrl', 'ApiKeyFile', 'AllowedDownloadHosts',
             'AuditOnly', 'ForceRepair', 'ApiRetryCount', 'ApiRetryDelaySeconds',
-            'EnrollmentTimeoutSeconds', 'LogDirectory')) {
+            'EnrollmentTimeoutSeconds', 'AllowStaleAgentReenrollment',
+            'StaleAgentReenrollmentMinutes', 'LogDirectory')) {
         if ($null -eq $Configuration.PSObject.Properties[$name]) {
             throw "Missing required configuration property: $name"
         }
@@ -159,6 +166,11 @@ function ConvertTo-GpoConfiguration {
     }
     if ([string]::IsNullOrWhiteSpace([string]$Configuration.LogDirectory)) {
         throw 'LogDirectory must not be empty.'
+    }
+    $staleAgentReenrollmentMinutes = [int]$Configuration.StaleAgentReenrollmentMinutes
+    if ($staleAgentReenrollmentMinutes -lt 1 -or
+        $staleAgentReenrollmentMinutes -gt 525600) {
+        throw 'StaleAgentReenrollmentMinutes must be between 1 and 525600.'
     }
 
     $allowedHosts = @($Configuration.AllowedDownloadHosts)
@@ -187,7 +199,125 @@ function ConvertTo-GpoConfiguration {
         ApiRetryCount = [int]$Configuration.ApiRetryCount
         ApiRetryDelaySeconds = [int]$Configuration.ApiRetryDelaySeconds
         EnrollmentTimeoutSeconds = [int]$Configuration.EnrollmentTimeoutSeconds
+        AllowStaleAgentReenrollment = [bool]$Configuration.AllowStaleAgentReenrollment
+        StaleAgentReenrollmentMinutes = $staleAgentReenrollmentMinutes
         LogDirectory = [string]$Configuration.LogDirectory
+    }
+}
+
+function ConvertTo-UtcTimestamp {
+    [CmdletBinding()]
+    param([Parameter()][AllowNull()][object]$Value)
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) {
+        return $null
+    }
+    if ($Value -is [DateTimeOffset]) {
+        return ([DateTimeOffset]$Value).ToUniversalTime()
+    }
+    if ($Value -is [DateTime]) {
+        $dateTime = [DateTime]$Value
+        if ($dateTime.Kind -eq [DateTimeKind]::Unspecified) {
+            $dateTime = [DateTime]::SpecifyKind($dateTime, [DateTimeKind]::Utc)
+        }
+        return ([DateTimeOffset]$dateTime).ToUniversalTime()
+    }
+
+    $parsed = [DateTimeOffset]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AssumeUniversal -bor
+        [Globalization.DateTimeStyles]::AdjustToUniversal
+    if (-not [DateTimeOffset]::TryParse(
+            [string]$Value,
+            [Globalization.CultureInfo]::InvariantCulture,
+            $styles,
+            [ref]$parsed)) {
+        return $null
+    }
+    return $parsed.ToUniversalTime()
+}
+
+function Get-StaleAgentReenrollmentDecision {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][psobject]$Agent,
+        [Parameter(Mandatory)][object]$DataAsOf,
+        [Parameter(Mandatory)][ValidateRange(1, 525600)][int]$MinimumAgeMinutes
+    )
+
+    $status = ([string]$Agent.status).ToLowerInvariant()
+    if ($status -notin @('disconnected', 'never_connected')) {
+        return [pscustomobject]@{
+            Eligible = $false
+            Reason = 'agent_status_is_not_replaceable'
+            Status = $status
+            AgeMinutes = $null
+            DisconnectedMinutes = $null
+        }
+    }
+
+    $dataTimestamp = ConvertTo-UtcTimestamp -Value $DataAsOf
+    $dateAdded = ConvertTo-UtcTimestamp -Value $Agent.dateAdded
+    if ($null -eq $dataTimestamp -or $null -eq $dateAdded -or
+        $dateAdded -gt $dataTimestamp) {
+        return [pscustomobject]@{
+            Eligible = $false
+            Reason = 'registration_timestamp_is_missing_or_invalid'
+            Status = $status
+            AgeMinutes = $null
+            DisconnectedMinutes = $null
+        }
+    }
+
+    $ageMinutes = [math]::Floor(($dataTimestamp - $dateAdded).TotalMinutes)
+    if ($ageMinutes -lt $MinimumAgeMinutes) {
+        return [pscustomobject]@{
+            Eligible = $false
+            Reason = 'agent_record_is_too_recent'
+            Status = $status
+            AgeMinutes = $ageMinutes
+            DisconnectedMinutes = $null
+        }
+    }
+
+    if ($status -eq 'never_connected') {
+        return [pscustomobject]@{
+            Eligible = $true
+            Reason = 'never_connected_record_is_stale'
+            Status = $status
+            AgeMinutes = $ageMinutes
+            DisconnectedMinutes = $null
+        }
+    }
+
+    $lastKeepAlive = ConvertTo-UtcTimestamp -Value $Agent.lastKeepAlive
+    if ($null -eq $lastKeepAlive -or $lastKeepAlive -gt $dataTimestamp) {
+        return [pscustomobject]@{
+            Eligible = $false
+            Reason = 'last_keep_alive_is_missing_or_invalid'
+            Status = $status
+            AgeMinutes = $ageMinutes
+            DisconnectedMinutes = $null
+        }
+    }
+
+    $disconnectedMinutes = [math]::Floor(
+        ($dataTimestamp - $lastKeepAlive).TotalMinutes)
+    if ($disconnectedMinutes -lt $MinimumAgeMinutes) {
+        return [pscustomobject]@{
+            Eligible = $false
+            Reason = 'agent_was_disconnected_too_recently'
+            Status = $status
+            AgeMinutes = $ageMinutes
+            DisconnectedMinutes = $disconnectedMinutes
+        }
+    }
+
+    return [pscustomobject]@{
+        Eligible = $true
+        Reason = 'disconnected_record_is_stale'
+        Status = $status
+        AgeMinutes = $ageMinutes
+        DisconnectedMinutes = $disconnectedMinutes
     }
 }
 
@@ -1085,15 +1215,44 @@ function Invoke-WazuhAgentDeployment {
     $hasValidKey = Test-LocalClientKey -LiteralPath $clientKeyPath `
         -ComputerName $env:COMPUTERNAME
     $managerHasAgent = [bool]$agentState.registered
+    $replacementEnrollment = $false
+    $reenrollmentDecision = $null
 
     if (-not $hasValidKey -and $managerHasAgent) {
-        $exception = New-HttpException -Message `
-            'Manager has this agent name but the endpoint has no valid client.keys. Refusing automatic enrollment.' `
-            -StatusCode 409
-        throw $exception
+        if (-not $configuration.AllowStaleAgentReenrollment) {
+            throw (New-HttpException -Message `
+                'Manager has this agent name but the endpoint has no valid client.keys. Stale-agent re-enrollment is disabled.' `
+                -StatusCode 409)
+        }
+        if ($null -eq $agentState.agent) {
+            throw (New-HttpException -Message `
+                'Manager reported an agent record without unambiguous agent details.' `
+                -StatusCode 409)
+        }
+        $reenrollmentDecision = Get-StaleAgentReenrollmentDecision `
+            -Agent $agentState.agent `
+            -DataAsOf $agentState.dataAsOf `
+            -MinimumAgeMinutes $configuration.StaleAgentReenrollmentMinutes
+        if (-not $reenrollmentDecision.Eligible) {
+            throw (New-HttpException -Message `
+                "Manager has this agent name but controlled re-enrollment is not allowed: $($reenrollmentDecision.Reason)." `
+                -StatusCode 409)
+        }
+        $replacementEnrollment = $true
+        Write-DeploymentLog -Level WARN `
+            -Message 'A stale, unambiguous manager record is eligible for controlled re-enrollment.' `
+            -Data @{
+                agentId = [string]$agentState.agent.id
+                status = [string]$reenrollmentDecision.Status
+                reason = [string]$reenrollmentDecision.Reason
+                ageMinutes = $reenrollmentDecision.AgeMinutes
+                disconnectedMinutes = $reenrollmentDecision.DisconnectedMinutes
+                minimumAgeMinutes = $configuration.StaleAgentReenrollmentMinutes
+            }
     }
 
-    $freshEnrollment = -not $hasValidKey -and -not $managerHasAgent
+    $freshEnrollment = (-not $hasValidKey -and
+        (-not $managerHasAgent -or $replacementEnrollment))
     if ($hasValidKey -and -not $managerHasAgent) {
         Write-DeploymentLog -Level WARN `
             -Message 'A local client.keys exists but the manager has no matching name; identity is preserved and enrollment is not repeated.'
@@ -1135,6 +1294,7 @@ function Invoke-WazuhAgentDeployment {
                 validLocalKey = $hasValidKey
                 managerHasAgent = $managerHasAgent
                 freshEnrollment = $freshEnrollment
+                replacementEnrollment = $replacementEnrollment
             }
         return $script:ExitCodes.Success
     }

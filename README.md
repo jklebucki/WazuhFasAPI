@@ -81,8 +81,10 @@ curl -fsS -H "X-Admin-API-Key: $ADMIN_API_KEY" http://127.0.0.1:8765/api/v1/agen
 
 [Install-WazuhAgent.ps1](wazuh-bootstrap-api/deploy/gpo/Install-WazuhAgent.ps1) instaluje,
 aktualizuje i naprawia agenta Wazuh. Ponowne uruchomienie po przerwanym MSI naprawia częściową
-instalację, nie zachowuje pustego lub nieprawidłowego `client.keys` i wykonuje świeży enrollment
-wyłącznie wtedy, gdy manager nie ma konfliktującego rekordu.
+instalację i nie zachowuje pustego lub nieprawidłowego `client.keys`. Skrypt dopuszcza
+kontrolowany re-enrollment jednego starego rekordu `disconnected`/`never_connected`; aktywne,
+świeże i niejednoznaczne rekordy pozostają chronione, a FastAPI nadal nie wykonuje operacji
+modyfikujących Wazuh.
 
 Przed wdrożeniem uruchom
 [Test-WazuhGpoReadiness.ps1](wazuh-bootstrap-api/deploy/gpo/Test-WazuhGpoReadiness.ps1).

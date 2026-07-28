@@ -50,6 +50,25 @@ Uruchom `sudoedit /var/ossec/etc/ossec.conf` i w istniejącej sekcji `<auth>` zm
 <use_password>yes</use_password>
 ```
 
+Kontrolowany re-enrollment starego rekordu wymaga również aktywnej polityki `force`. Zweryfikuj,
+że w tej samej sekcji istnieje poniższy blok albo że manager używa równoważnych, nie mniej
+restrykcyjnych wartości:
+
+```xml
+<force>
+  <enabled>yes</enabled>
+  <disconnected_time enabled="yes">1h</disconnected_time>
+  <after_registration_time>1h</after_registration_time>
+  <key_mismatch>yes</key_mismatch>
+</force>
+```
+
+Wszystkie warunki są wymagane jednocześnie. Nie ustawiaj `disconnected_time` na `0`, nie
+wyłączaj jego atrybutu `enabled` i nie ustawiaj `after_registration_time` na `0`, ponieważ
+umożliwiłoby to zastąpienie świeżego lub aktywnego agenta. Bootstrap API pozostaje wyłącznie
+do odczytu; zastąpienie starego rekordu wykonuje natywnie `wazuh-authd` dopiero podczas
+uwierzytelnionego enrollmentu.
+
 Utwórz hasło interaktywnie, aby nie trafiło do historii powłoki:
 
 ```bash
@@ -236,12 +255,16 @@ wdrożenie ustaw z:
 ```powershell
 $script:AuditOnly = $true
 $script:ForceRepair = $false
+$script:AllowStaleAgentReenrollment = $true
+$script:StaleAgentReenrollmentMinutes = 60
 ```
 
 Wymaganie SHA-256 i kontrola podpisu Wazuh są stałymi zasadami skryptu, a nie opcjami
 konfiguracyjnymi. `$script:ForceRepair = $true` służy wyłącznie kontrolowanej akcji naprawczej,
-nie stałej polityce. Po skonfigurowaniu wykonaj podpisanie opisane w sekcji 6, a następnie
-skopiuj do SYSVOL tylko finalny `Install-WazuhAgent.ps1`.
+nie stałej polityce. Próg re-enrollmentu nie może być krótszy niż odpowiednie warunki
+`disconnected_time` i `after_registration_time` na managerze. Po skonfigurowaniu wykonaj
+podpisanie opisane w sekcji 6, a następnie skopiuj do SYSVOL tylko finalny
+`Install-WazuhAgent.ps1`.
 
 ## 6. Podpisanie PowerShell
 
@@ -434,8 +457,8 @@ Get-Content 'C:\ProgramData\Citronex\WazuhBootstrap\Logs\WazuhAgentGpo-*.jsonl' 
 Get-Service WazuhSvc -ErrorAction SilentlyContinue
 ```
 
-Zweryfikuj w logach co najmniej stany `None`, `Install`, `Repair` oraz kontrolowany konflikt
-braku klucza przy istniejącym rekordzie managera.
+Zweryfikuj w logach co najmniej stany `None`, `Install`, `Repair`, odmowę zastąpienia aktywnego
+lub świeżego rekordu oraz kwalifikację starego rekordu `disconnected`/`never_connected`.
 
 ## 10. Aktywacja zmian
 
@@ -459,13 +482,15 @@ działania, ale celowo nie odinstalowuje już wdrożonego Wazuh.
 Najczęstsze przypadki:
 
 * kod 20: zaufanie TLS, klucz API, DNS, proxy lub chwilowa niedostępność API;
-* kod 30: rekord managera istnieje bez lokalnego klucza albo duplikat nazwy;
+* kod 30: duplikat nazwy, aktywny/świeży rekord managera bez lokalnego klucza, brak
+  wiarygodnych dat albo wyłączony kontrolowany re-enrollment;
 * brak instalacji w audycie: `$script:AuditOnly` nadal ma wartość `$true`;
 * kod 40 przy paczce: brak SHA-256, niedozwolony host, podpis lub CRL;
 * kod 50: zabezpieczony katalog roboczy i `msiexec.log` pozostają w `%ProgramData%`;
 * kod 60: usługa, lokalny klucz lub enrollment;
 * enrollment timeout: port 1515, hasło authd, unikalność nazwy i log
-  `C:\Program Files (x86)\ossec-agent\ossec.log`.
+  `C:\Program Files (x86)\ossec-agent\ossec.log`; przy zastępowaniu starego rekordu sprawdź
+  także managerowy blok `<auth><force>`.
 
 Przed rozszerzeniem GPO poza pilot wykonaj macierz opisaną w
 [GPO-TESTING.md](GPO-TESTING.md). Nie uruchamiaj harnessu destrukcyjnego przez Startup Script

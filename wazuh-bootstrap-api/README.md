@@ -106,10 +106,11 @@ Nie używaj `-k` w produkcyjnych konsumentach. Komputery domenowe powinny ufać 
 
 [Install-WazuhAgent.ps1](deploy/gpo/Install-WazuhAgent.ps1) jest idempotentnym skryptem
 startowym dla komputerów AD. Instaluje, naprawia lub aktualizuje agenta na podstawie manifestu,
-zachowuje wyłącznie prawidłową lokalną tożsamość, weryfikuje SHA-256 i Authenticode oraz odmawia
-automatycznego enrollmentu przy konflikcie nazwy. Ponowne uruchomienie po przerwanym MSI naprawia
-częściową instalację; pusty lub nieprawidłowy `client.keys` nie jest przywracany jako kopia
-tożsamości.
+zachowuje wyłącznie prawidłową lokalną tożsamość oraz weryfikuje SHA-256 i Authenticode.
+Ponowne uruchomienie po przerwanym MSI naprawia częściową instalację; pusty lub nieprawidłowy
+`client.keys` nie jest przywracany jako kopia tożsamości. Jeden odpowiednio stary rekord
+`disconnected` albo `never_connected` może przejść kontrolowany re-enrollment egzekwowany
+ostatecznie przez politykę `wazuh-authd`; aktywne, świeże i niejednoznaczne rekordy są blokowane.
 
 Nietajna konfiguracja jest osadzona na początku skryptu; tajemnice są odczytywane z osobnego,
 chronionego udziału dostępnego dla kont komputerów i nigdy nie trafiają do SYSVOL. Przed

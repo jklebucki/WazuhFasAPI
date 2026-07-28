@@ -52,6 +52,83 @@ Describe 'Install-WazuhAgent client key validation' {
     }
 }
 
+Describe 'Install-WazuhAgent controlled re-enrollment policy' {
+    It 'allows an old disconnected record' {
+        $agent = [pscustomobject]@{
+            status = 'disconnected'
+            dateAdded = '2025-09-25T06:46:37Z'
+            lastKeepAlive = '2026-07-13T13:20:54Z'
+        }
+
+        $decision = Get-StaleAgentReenrollmentDecision -Agent $agent `
+            -DataAsOf '2026-07-28T12:10:58Z' -MinimumAgeMinutes 60
+
+        $decision.Eligible | Should Be $true
+        $decision.Reason | Should Be 'disconnected_record_is_stale'
+        ($decision.DisconnectedMinutes -gt 60) | Should Be $true
+    }
+
+    It 'allows an old record which never connected' {
+        $agent = [pscustomobject]@{
+            status = 'never_connected'
+            dateAdded = '2026-07-20T12:00:00Z'
+            lastKeepAlive = $null
+        }
+
+        $decision = Get-StaleAgentReenrollmentDecision -Agent $agent `
+            -DataAsOf '2026-07-28T12:10:58Z' -MinimumAgeMinutes 60
+
+        $decision.Eligible | Should Be $true
+        $decision.Reason | Should Be 'never_connected_record_is_stale'
+    }
+
+    It 'blocks active and recently disconnected records' {
+        $active = [pscustomobject]@{
+            status = 'active'
+            dateAdded = '2025-01-01T00:00:00Z'
+            lastKeepAlive = '2026-07-28T12:10:00Z'
+        }
+        $recent = [pscustomobject]@{
+            status = 'disconnected'
+            dateAdded = '2025-01-01T00:00:00Z'
+            lastKeepAlive = '2026-07-28T11:40:58Z'
+        }
+
+        $activeDecision = Get-StaleAgentReenrollmentDecision -Agent $active `
+            -DataAsOf '2026-07-28T12:10:58Z' -MinimumAgeMinutes 60
+        $recentDecision = Get-StaleAgentReenrollmentDecision -Agent $recent `
+            -DataAsOf '2026-07-28T12:10:58Z' -MinimumAgeMinutes 60
+
+        $activeDecision.Eligible | Should Be $false
+        $activeDecision.Reason | Should Be 'agent_status_is_not_replaceable'
+        $recentDecision.Eligible | Should Be $false
+        $recentDecision.Reason | Should Be 'agent_was_disconnected_too_recently'
+    }
+
+    It 'fails closed when timestamps are missing, invalid, or in the future' {
+        $missingKeepAlive = [pscustomobject]@{
+            status = 'disconnected'
+            dateAdded = '2025-01-01T00:00:00Z'
+            lastKeepAlive = $null
+        }
+        $futureRegistration = [pscustomobject]@{
+            status = 'never_connected'
+            dateAdded = '2026-07-29T00:00:00Z'
+            lastKeepAlive = $null
+        }
+
+        $missingDecision = Get-StaleAgentReenrollmentDecision -Agent $missingKeepAlive `
+            -DataAsOf '2026-07-28T12:10:58Z' -MinimumAgeMinutes 60
+        $futureDecision = Get-StaleAgentReenrollmentDecision -Agent $futureRegistration `
+            -DataAsOf '2026-07-28T12:10:58Z' -MinimumAgeMinutes 60
+
+        $missingDecision.Eligible | Should Be $false
+        $missingDecision.Reason | Should Be 'last_keep_alive_is_missing_or_invalid'
+        $futureDecision.Eligible | Should Be $false
+        $futureDecision.Reason | Should Be 'registration_timestamp_is_missing_or_invalid'
+    }
+}
+
 Describe 'Install-WazuhAgent local file health' {
     It 'accepts a non-empty Wazuh configuration and rejects an empty one' {
         $valid = Join-Path $TestDrive 'valid-ossec.conf'
@@ -170,12 +247,20 @@ Describe 'Install-WazuhAgent configuration' {
         $configuration = ConvertTo-GpoConfiguration -Configuration (Get-GpoConfiguration)
         $configuration.BootstrapApiUrl | Should Be 'https://wazuh.ad.citronex.pl:8443'
         $configuration.AuditOnly | Should Be $false
+        $configuration.AllowStaleAgentReenrollment | Should Be $true
+        $configuration.StaleAgentReenrollmentMinutes | Should Be 60
         ($configuration.AllowedDownloadHosts -contains 'packages.wazuh.com') | Should Be $true
     }
 
     It 'rejects invalid embedded settings' {
         $configuration = Get-GpoConfiguration
         $configuration.BootstrapApiUrl = 'http://wazuh.example'
+        Assert-Throws { ConvertTo-GpoConfiguration -Configuration $configuration }
+    }
+
+    It 'rejects an invalid stale-agent re-enrollment threshold' {
+        $configuration = Get-GpoConfiguration
+        $configuration.StaleAgentReenrollmentMinutes = 0
         Assert-Throws { ConvertTo-GpoConfiguration -Configuration $configuration }
     }
 }
