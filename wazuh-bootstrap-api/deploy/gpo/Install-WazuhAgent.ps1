@@ -10,7 +10,8 @@ configuration. It never retrieves or guesses client.keys. Enrollment is allowed 
 manager has no record for the computer or when one unambiguous record satisfies the embedded
 stale-agent policy and the manager's authd force policy. A separately protected enrollment
 password file is required. Secrets are never written to this script, logs, or the msiexec
-command line.
+command line. A local agent identity that does not match the current computer name triggers
+a controlled full reinstall and re-enrollment without restoring the previous identity files.
 #>
 
 [CmdletBinding()]
@@ -544,6 +545,47 @@ function Get-AgentInstallDirectory {
     return $allowedDirectories[0]
 }
 
+function Get-LocalClientKeyState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LiteralPath,
+        [Parameter(Mandatory)][string]$ComputerName
+    )
+
+    $state = [ordered]@{
+        Exists = $false
+        IsValid = $false
+        AgentId = $null
+        AgentName = $null
+        MatchesComputerName = $false
+    }
+    if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
+        return [pscustomobject]$state
+    }
+    $state.Exists = $true
+    try {
+        $file = Get-Item -LiteralPath $LiteralPath
+        if ($file.Length -lt 20 -or $file.Length -gt 8192) {
+            return [pscustomobject]$state
+        }
+        $lines = @((Get-Content -LiteralPath $LiteralPath -Encoding ASCII) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($lines.Count -ne 1) { return [pscustomobject]$state }
+        $match = [regex]::Match($lines[0], `
+            '^\s*(?<id>\d{3,8})\s+(?<name>[A-Za-z0-9_.-]{1,128})\s+\S+\s+\S{16,}\s*$')
+        if (-not $match.Success -or $match.Groups['id'].Value -eq '000') {
+            return [pscustomobject]$state
+        }
+        $state.IsValid = $true
+        $state.AgentId = $match.Groups['id'].Value
+        $state.AgentName = $match.Groups['name'].Value
+        $state.MatchesComputerName = $state.AgentName.Equals(
+            $ComputerName, [StringComparison]::OrdinalIgnoreCase)
+    }
+    catch { }
+    return [pscustomobject]$state
+}
+
 function Test-LocalClientKey {
     [CmdletBinding()]
     param(
@@ -551,49 +593,142 @@ function Test-LocalClientKey {
         [Parameter(Mandatory)][string]$ComputerName
     )
 
+    return [bool](Get-LocalClientKeyState -LiteralPath $LiteralPath `
+        -ComputerName $ComputerName).MatchesComputerName
+}
+
+function Get-LocalAgentConfigurationState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LiteralPath,
+        [Parameter()][AllowEmptyString()][string]$ComputerName = '',
+        [Parameter()][AllowEmptyString()][string]$ManagerAddress = '',
+        [Parameter()][int]$ManagerPort = 0,
+        [Parameter()][AllowEmptyString()][string]$RegistrationAddress = '',
+        [Parameter()][int]$RegistrationPort = 0
+    )
+
+    $state = [ordered]@{
+        Exists = $false
+        IsParseable = $false
+        HasValidManager = $false
+        ManagerMatchesExpected = $false
+        EnrollmentMatchesExpected = $false
+        AgentNameStatus = 'Absent'
+        AgentName = $null
+        EnrollmentCount = 0
+    }
     if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) {
-        return $false
+        return [pscustomobject]$state
     }
+    $state.Exists = $true
     try {
-        $file = Get-Item -LiteralPath $LiteralPath
-        if ($file.Length -lt 20 -or $file.Length -gt 8192) { return $false }
-        $lines = @((Get-Content -LiteralPath $LiteralPath -Encoding ASCII) |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($lines.Count -ne 1) { return $false }
-        $match = [regex]::Match($lines[0], `
-            '^\s*(?<id>\d{3,8})\s+(?<name>[A-Za-z0-9_.-]{1,128})\s+\S+\s+\S{16,}\s*$')
-        return $match.Success -and $match.Groups['id'].Value -ne '000' -and
-            $match.Groups['name'].Value.Equals($ComputerName,
-                [StringComparison]::OrdinalIgnoreCase)
+        $item = Get-Item -LiteralPath $LiteralPath
+        if ($item.Length -lt 32 -or $item.Length -gt 10MB) {
+            return [pscustomobject]$state
+        }
+        [xml]$document = Get-Content -LiteralPath $LiteralPath -Raw -Encoding UTF8
+        $root = $document.SelectSingleNode('/ossec_config')
+        if ($null -eq $root) { return [pscustomobject]$state }
+        $client = $root.SelectSingleNode('client')
+        if ($null -eq $client) { return [pscustomobject]$state }
+        $state.IsParseable = $true
+
+        $servers = @($client.SelectNodes('server'))
+        $validServers = @($servers | Where-Object {
+                $addressNode = $_.SelectSingleNode('address')
+                $value = if ($null -eq $addressNode) { '' } else { $addressNode.InnerText.Trim() }
+                $value -match '^[A-Za-z0-9.-]+$' -and
+                $value -notin @('0.0.0.0', 'MANAGER_IP')
+            })
+        $state.HasValidManager = $validServers.Count -gt 0
+        if (-not [string]::IsNullOrWhiteSpace($ManagerAddress) -and
+            $ManagerPort -gt 0 -and $servers.Count -eq 1) {
+            $addressNode = $servers[0].SelectSingleNode('address')
+            $portNode = $servers[0].SelectSingleNode('port')
+            $protocolNode = $servers[0].SelectSingleNode('protocol')
+            $addressMatches = $null -ne $addressNode -and
+                $addressNode.InnerText.Trim().Equals(
+                    $ManagerAddress, [StringComparison]::OrdinalIgnoreCase)
+            $portMatches = $null -ne $portNode -and
+                $portNode.InnerText.Trim() -eq [string]$ManagerPort
+            $protocolMatches = $null -ne $protocolNode -and
+                $protocolNode.InnerText.Trim().Equals(
+                    'tcp', [StringComparison]::OrdinalIgnoreCase)
+            $state.ManagerMatchesExpected = $addressMatches -and
+                $portMatches -and $protocolMatches
+        }
+
+        $enrollments = @($client.SelectNodes('enrollment'))
+        $state.EnrollmentCount = $enrollments.Count
+        $agentNameNodes = @($client.SelectNodes('enrollment/agent_name'))
+        if ($agentNameNodes.Count -eq 1) {
+            $agentName = $agentNameNodes[0].InnerText.Trim()
+            $state.AgentName = $agentName
+            if ($agentName -notmatch '^[A-Za-z0-9_.-]{1,128}$') {
+                $state.AgentNameStatus = 'Invalid'
+            }
+            elseif ([string]::IsNullOrWhiteSpace($ComputerName)) {
+                $state.AgentNameStatus = 'Present'
+            }
+            elseif ($agentName.Equals($ComputerName,
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                $state.AgentNameStatus = 'Match'
+            }
+            else {
+                $state.AgentNameStatus = 'Mismatch'
+            }
+        }
+        elseif ($agentNameNodes.Count -gt 1) {
+            $state.AgentNameStatus = 'Ambiguous'
+            $state.AgentName = (@($agentNameNodes | ForEach-Object {
+                        $_.InnerText.Trim()
+                    }) -join ',')
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($RegistrationAddress) -and
+            $RegistrationPort -gt 0 -and
+            -not [string]::IsNullOrWhiteSpace($ComputerName) -and
+            $enrollments.Count -eq 1) {
+            $enrollment = $enrollments[0]
+            $enabledNode = $enrollment.SelectSingleNode('enabled')
+            $addressNode = $enrollment.SelectSingleNode('manager_address')
+            $portNode = $enrollment.SelectSingleNode('port')
+            $passwordPathNode = $enrollment.SelectSingleNode('authorization_pass_path')
+            $state.EnrollmentMatchesExpected =
+                $state.AgentNameStatus -eq 'Match' -and
+                $null -ne $enabledNode -and
+                $enabledNode.InnerText.Trim().Equals(
+                    'yes', [StringComparison]::OrdinalIgnoreCase) -and
+                $null -ne $addressNode -and
+                $addressNode.InnerText.Trim().Equals(
+                    $RegistrationAddress, [StringComparison]::OrdinalIgnoreCase) -and
+                $null -ne $portNode -and
+                $portNode.InnerText.Trim() -eq [string]$RegistrationPort -and
+                ($null -eq $passwordPathNode -or
+                    $passwordPathNode.InnerText.Trim().Equals(
+                        'authd.pass', [StringComparison]::OrdinalIgnoreCase))
+        }
     }
-    catch {
-        return $false
-    }
+    catch { }
+    return [pscustomobject]$state
 }
 
 function Test-LocalAgentConfiguration {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$LiteralPath)
+    param(
+        [Parameter(Mandatory)][string]$LiteralPath,
+        [Parameter()][AllowEmptyString()][string]$ManagerAddress = '',
+        [Parameter()][int]$ManagerPort = 0
+    )
 
-    if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf)) { return $false }
-    try {
-        $item = Get-Item -LiteralPath $LiteralPath
-        if ($item.Length -lt 32 -or $item.Length -gt 10MB) { return $false }
-        $content = Get-Content -LiteralPath $LiteralPath -Raw -Encoding UTF8
-        if ($content -notmatch '(?is)<ossec_config(?:\s|>)' -or
-            $content -notmatch '(?is)<client(?:\s|>)' -or
-            $content -notmatch '(?is)<server(?:\s|>)') {
-            return $false
-        }
-        $addresses = @([regex]::Matches(
-                $content, '(?is)<address>\s*(?<value>[^<]+?)\s*</address>'))
-        return @($addresses | Where-Object {
-                $value = $_.Groups['value'].Value.Trim()
-                $value -match '^[A-Za-z0-9.-]+$' -and
-                $value -notin @('0.0.0.0', 'MANAGER_IP')
-            }).Count -gt 0
+    $state = Get-LocalAgentConfigurationState -LiteralPath $LiteralPath `
+        -ManagerAddress $ManagerAddress -ManagerPort $ManagerPort
+    if (-not $state.IsParseable -or -not $state.HasValidManager) { return $false }
+    if (-not [string]::IsNullOrWhiteSpace($ManagerAddress) -and $ManagerPort -gt 0) {
+        return [bool]$state.ManagerMatchesExpected
     }
-    catch { return $false }
+    return $true
 }
 
 function Test-InstalledAgentExecutable {
@@ -801,8 +936,8 @@ function Invoke-WazuhMsi {
     if ($Mode -eq 'Repair') {
         # Windows Installer can return 1706 during /f when the original source list
         # no longer exists, even when a verified package is supplied. A controlled
-        # uninstall/install is deterministic and preserves identity through the
-        # caller's protected client.keys/ossec.conf backup.
+        # uninstall/install is deterministic. The caller decides whether an existing
+        # identity may be restored or must be intentionally replaced.
         $productCode = Get-InstalledAgentProductCode
         $uninstallLogPath = Join-Path (Split-Path $LogPath -Parent) 'msiexec-uninstall.log'
         $uninstallArguments = @('/x', $productCode, '/qn', '/norestart',
@@ -906,7 +1041,11 @@ function Repair-AgentConfiguration {
     param(
         [Parameter(Mandatory)][string]$LiteralPath,
         [Parameter(Mandatory)][string]$ManagerAddress,
-        [Parameter(Mandatory)][int]$ManagerPort
+        [Parameter(Mandatory)][int]$ManagerPort,
+        [Parameter()][AllowEmptyString()][string]$RegistrationAddress = '',
+        [Parameter()][int]$RegistrationPort = 0,
+        [Parameter()][AllowEmptyString()][string]$AgentName = '',
+        [Parameter()][switch]$ConfigureEnrollment
     )
 
     try { [xml]$document = Get-Content -LiteralPath $LiteralPath -Raw -Encoding UTF8 }
@@ -918,11 +1057,11 @@ function Repair-AgentConfiguration {
         $client = $document.CreateElement('client')
         $null = $root.PrependChild($client)
     }
-    $server = $client.SelectSingleNode('server')
-    if ($null -eq $server) {
-        $server = $document.CreateElement('server')
-        $null = $client.AppendChild($server)
+    foreach ($existingServer in @($client.SelectNodes('server'))) {
+        $null = $client.RemoveChild($existingServer)
     }
+    $server = $document.CreateElement('server')
+    $null = $client.PrependChild($server)
     foreach ($setting in ([ordered]@{
             address = $ManagerAddress
             port = [string]$ManagerPort
@@ -935,6 +1074,30 @@ function Repair-AgentConfiguration {
         }
         $node.InnerText = [string]$setting.Value
     }
+
+    if ($ConfigureEnrollment) {
+        if ([string]::IsNullOrWhiteSpace($RegistrationAddress) -or
+            $RegistrationPort -lt 1 -or $RegistrationPort -gt 65535 -or
+            $AgentName -notmatch '^[A-Za-z0-9_.-]{1,128}$') {
+            throw 'Controlled enrollment configuration parameters are invalid.'
+        }
+        foreach ($existingEnrollment in @($client.SelectNodes('enrollment'))) {
+            $null = $client.RemoveChild($existingEnrollment)
+        }
+        $enrollment = $document.CreateElement('enrollment')
+        foreach ($setting in ([ordered]@{
+                enabled = 'yes'
+                manager_address = $RegistrationAddress
+                port = [string]$RegistrationPort
+                agent_name = $AgentName
+                authorization_pass_path = 'authd.pass'
+            }).GetEnumerator()) {
+            $node = $document.CreateElement([string]$setting.Key)
+            $node.InnerText = [string]$setting.Value
+            $null = $enrollment.AppendChild($node)
+        }
+        $null = $client.AppendChild($enrollment)
+    }
     $writerSettings = New-Object System.Xml.XmlWriterSettings
     $writerSettings.Encoding = New-Object Text.UTF8Encoding($false)
     $writerSettings.Indent = $true
@@ -944,7 +1107,14 @@ function Repair-AgentConfiguration {
     $writer = [Xml.XmlWriter]::Create($LiteralPath, $writerSettings)
     try { $document.Save($writer) }
     finally { $writer.Dispose() }
-    if (-not (Test-LocalAgentConfiguration -LiteralPath $LiteralPath)) {
+    $configurationState = Get-LocalAgentConfigurationState `
+        -LiteralPath $LiteralPath -ComputerName $AgentName `
+        -ManagerAddress $ManagerAddress -ManagerPort $ManagerPort `
+        -RegistrationAddress $RegistrationAddress `
+        -RegistrationPort $RegistrationPort
+    if (-not $configurationState.ManagerMatchesExpected -or
+        ($ConfigureEnrollment -and
+            -not $configurationState.EnrollmentMatchesExpected)) {
         throw 'Controlled ossec.conf repair did not produce a valid manager configuration.'
     }
 }
@@ -1212,16 +1382,39 @@ function Invoke-WazuhAgentDeployment {
         Write-DeploymentLog -Level WARN `
             -Message 'Removed a stale enrollment password file left by an interrupted run.'
     }
-    $hasValidKey = Test-LocalClientKey -LiteralPath $clientKeyPath `
+    $localKeyState = Get-LocalClientKeyState -LiteralPath $clientKeyPath `
         -ComputerName $env:COMPUTERNAME
+    $localConfigurationState = Get-LocalAgentConfigurationState `
+        -LiteralPath $configFilePath -ComputerName $env:COMPUTERNAME `
+        -ManagerAddress $managerAddress -ManagerPort $communicationPort `
+        -RegistrationAddress $registrationAddress `
+        -RegistrationPort $registrationPort
+    $hasValidKey = [bool]$localKeyState.MatchesComputerName
+    $configurationNameConflict = $localConfigurationState.AgentNameStatus `
+        -in @('Mismatch', 'Ambiguous', 'Invalid')
+    $keyNameConflict = $localKeyState.IsValid -and
+        -not $localKeyState.MatchesComputerName
+    $computerRenameDetected = $configurationNameConflict -or $keyNameConflict
+    $enrollmentRequired = -not $hasValidKey -or $computerRenameDetected
+    if ($computerRenameDetected) {
+        Write-DeploymentLog -Level WARN `
+            -Message 'A local Wazuh identity does not match the current computer name.' `
+            -Data @{
+                configuredAgentName = $localConfigurationState.AgentName
+                configurationNameStatus = $localConfigurationState.AgentNameStatus
+                keyAgentId = $localKeyState.AgentId
+                keyAgentName = $localKeyState.AgentName
+                currentComputerName = $env:COMPUTERNAME
+            }
+    }
     $managerHasAgent = [bool]$agentState.registered
     $replacementEnrollment = $false
     $reenrollmentDecision = $null
 
-    if (-not $hasValidKey -and $managerHasAgent) {
+    if ($enrollmentRequired -and $managerHasAgent) {
         if (-not $configuration.AllowStaleAgentReenrollment) {
             throw (New-HttpException -Message `
-                'Manager has this agent name but the endpoint has no valid client.keys. Stale-agent re-enrollment is disabled.' `
+                'Manager has this agent name but the endpoint requires enrollment. Stale-agent re-enrollment is disabled.' `
                 -StatusCode 409)
         }
         if ($null -eq $agentState.agent) {
@@ -1251,8 +1444,9 @@ function Invoke-WazuhAgentDeployment {
             }
     }
 
-    $freshEnrollment = (-not $hasValidKey -and
+    $freshEnrollment = ($enrollmentRequired -and
         (-not $managerHasAgent -or $replacementEnrollment))
+    $resetLocalIdentity = $freshEnrollment
     if ($hasValidKey -and -not $managerHasAgent) {
         Write-DeploymentLog -Level WARN `
             -Message 'A local client.keys exists but the manager has no matching name; identity is preserved and enrollment is not repeated.'
@@ -1261,11 +1455,22 @@ function Invoke-WazuhAgentDeployment {
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     $executableHealthy = Test-InstalledAgentExecutable -LiteralPath $executablePath `
         -AllowedSignerSubjectRegex '(?i)\bWazuh\b'
-    $configurationHealthy = Test-LocalAgentConfiguration -LiteralPath $configFilePath
+    $configurationHealthy = Test-LocalAgentConfiguration `
+        -LiteralPath $configFilePath -ManagerAddress $managerAddress `
+        -ManagerPort $communicationPort
     $installationFilesHealthy = $executableHealthy -and $configurationHealthy
     $operation = 'None'
     if ($null -eq $installedVersion) {
         $operation = 'Install'
+    }
+    elseif ($resetLocalIdentity -and $installedVersion -gt $targetVersion) {
+        throw (New-HttpException -Message `
+            'Local identity reset requires a full reinstall, but the installed Wazuh agent is newer than the target. Automatic downgrade was refused.' `
+            -StatusCode 409)
+    }
+    elseif ($resetLocalIdentity) {
+        # Repair is implemented as a deterministic uninstall followed by install.
+        $operation = 'Repair'
     }
     elseif ($installedVersion -lt $targetVersion) {
         $operation = 'Install'
@@ -1279,11 +1484,6 @@ function Invoke-WazuhAgentDeployment {
             -Message 'Installed agent is newer than the target; downgrade was refused.' `
             -Data @{ installed = $installedVersion.ToString(); target = $targetVersion.ToString() }
     }
-    if ($freshEnrollment -and $operation -eq 'None') {
-        # Reapply manager/enrollment properties and restart a keyless existing installation.
-        $operation = 'Repair'
-    }
-
     if ($configuration.AuditOnly) {
         Write-DeploymentLog -Level INFO -Message 'Audit-only evaluation completed; no changes made.' `
             -Data @{
@@ -1295,6 +1495,10 @@ function Invoke-WazuhAgentDeployment {
                 managerHasAgent = $managerHasAgent
                 freshEnrollment = $freshEnrollment
                 replacementEnrollment = $replacementEnrollment
+                computerRenameDetected = $computerRenameDetected
+                resetLocalIdentity = $resetLocalIdentity
+                configuredAgentName = $localConfigurationState.AgentName
+                keyAgentName = $localKeyState.AgentName
             }
         return $script:ExitCodes.Success
     }
@@ -1333,16 +1537,49 @@ function Invoke-WazuhAgentDeployment {
 
             $backupFiles = @()
             if (Test-Path -LiteralPath $installDirectory -PathType Container) {
-                $backupFiles = @(Backup-AgentIdentity -InstallDirectory $installDirectory `
-                    -WorkDirectory $workDirectory)
+                if ($resetLocalIdentity) {
+                    foreach ($identityFile in @($keyFileName, $configFileName)) {
+                        $identityPath = Join-Path $installDirectory $identityFile
+                        if (Test-Path -LiteralPath $identityPath -PathType Leaf) {
+                            Copy-Item -LiteralPath $identityPath `
+                                -Destination (Join-Path $workDirectory `
+                                    ('previous-' + $identityFile)) -Force
+                        }
+                    }
+                }
+                else {
+                    $backupFiles = @(Backup-AgentIdentity `
+                        -InstallDirectory $installDirectory `
+                        -WorkDirectory $workDirectory)
+                }
             }
-            if (-not $configurationHealthy -and
+            Stop-AgentService -ServiceName $serviceName -ExecutablePath $executablePath
+
+            if ($resetLocalIdentity) {
+                foreach ($identityPath in @(
+                        $clientKeyPath,
+                        $configFilePath,
+                        $staleEnrollmentPasswordPath
+                    )) {
+                    if (Test-Path -LiteralPath $identityPath -PathType Leaf) {
+                        Remove-Item -LiteralPath $identityPath -Force
+                    }
+                }
+                Write-DeploymentLog -Level WARN `
+                    -Message 'Removed the previous local Wazuh identity before full reinstall.' `
+                    -Data @{
+                        previousConfiguredName = $localConfigurationState.AgentName
+                        previousKeyAgentId = $localKeyState.AgentId
+                        previousKeyAgentName = $localKeyState.AgentName
+                        currentComputerName = $env:COMPUTERNAME
+                    }
+            }
+            elseif (-not $configurationHealthy -and
                 (Test-Path -LiteralPath $configFilePath -PathType Leaf)) {
                 Copy-Item -LiteralPath $configFilePath `
                     -Destination (Join-Path $workDirectory 'ossec.conf.invalid') -Force
                 Remove-Item -LiteralPath $configFilePath -Force
             }
-            Stop-AgentService -ServiceName $serviceName -ExecutablePath $executablePath
 
             $properties = @{}
             if ($freshEnrollment -or -not (Test-Path -LiteralPath $configFilePath)) {
@@ -1363,32 +1600,56 @@ function Invoke-WazuhAgentDeployment {
                 Invoke-WazuhMsi -MsiPath $msiPath -Mode $operation `
                     -Properties $properties -LogPath $msiLog
                 $installDirectory = Get-AgentInstallDirectory -Manifest $manifest
+                $clientKeyPath = Join-Path $installDirectory $keyFileName
+                $configFilePath = Join-Path $installDirectory $configFileName
                 $executablePath = Join-Path $installDirectory $executableName
                 Stop-AgentService -ServiceName $serviceName -ExecutablePath $executablePath
-                if ($backupFiles.Count -gt 0) {
+                if (-not $resetLocalIdentity -and $backupFiles.Count -gt 0) {
                     Restore-AgentIdentity -InstallDirectory $installDirectory `
                         -WorkDirectory $workDirectory -Files $backupFiles
                 }
-                if (-not $configurationHealthy) {
+                if ($resetLocalIdentity) {
+                    if (Test-Path -LiteralPath $clientKeyPath -PathType Leaf) {
+                        Remove-Item -LiteralPath $clientKeyPath -Force
+                    }
+                    Repair-AgentConfiguration -LiteralPath $configFilePath `
+                        -ManagerAddress $managerAddress `
+                        -ManagerPort $communicationPort `
+                        -RegistrationAddress $registrationAddress `
+                        -RegistrationPort $registrationPort `
+                        -AgentName $env:COMPUTERNAME -ConfigureEnrollment
+                    Copy-Item -LiteralPath $configFilePath `
+                        -Destination (Join-Path $workDirectory `
+                            'ossec.conf.identity-reset') -Force
+                }
+                elseif (-not $configurationHealthy) {
                     Repair-AgentConfiguration `
-                        -LiteralPath (Join-Path $installDirectory $configFileName) `
+                        -LiteralPath $configFilePath `
                         -ManagerAddress $managerAddress -ManagerPort $communicationPort
-                    Copy-Item -LiteralPath (Join-Path $installDirectory $configFileName) `
+                    Copy-Item -LiteralPath $configFilePath `
                         -Destination (Join-Path $workDirectory 'ossec.conf.repaired') -Force
                 }
             }
             catch {
-                if ($backupFiles.Count -gt 0 -and
+                if (-not $resetLocalIdentity -and $backupFiles.Count -gt 0 -and
                     (Test-Path -LiteralPath $installDirectory -PathType Container)) {
                     Restore-AgentIdentity -InstallDirectory $installDirectory `
                         -WorkDirectory $workDirectory -Files $backupFiles
                 }
-                $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-                if ($null -ne $existingService -and $existingService.Status -ne 'Running') {
-                    try { Start-Service -Name $serviceName }
-                    catch {
-                        Write-DeploymentLog -Level ERROR `
-                            -Message 'Failed to restart the previous Wazuh service after MSI failure.'
+                if ($resetLocalIdentity) {
+                    Write-DeploymentLog -Level ERROR `
+                        -Message 'Identity reset failed; the previous identity was not restored or restarted.'
+                }
+                else {
+                    $existingService = Get-Service -Name $serviceName `
+                        -ErrorAction SilentlyContinue
+                    if ($null -ne $existingService -and
+                        $existingService.Status -ne 'Running') {
+                        try { Start-Service -Name $serviceName }
+                        catch {
+                            Write-DeploymentLog -Level ERROR `
+                                -Message 'Failed to restart the previous Wazuh service after MSI failure.'
+                        }
                     }
                 }
                 throw
@@ -1397,12 +1658,25 @@ function Invoke-WazuhAgentDeployment {
 
         $installDirectory = Get-AgentInstallDirectory -Manifest $manifest
         $clientKeyPath = Join-Path $installDirectory $keyFileName
+        $configFilePath = Join-Path $installDirectory $configFileName
         $executablePath = Join-Path $installDirectory $executableName
         $script:CurrentFailureExitCode = $script:ExitCodes.Agent
         if ($freshEnrollment) {
             # MSI may start WazuhSvc immediately. Stop it before creating authd.pass so the
             # intentional enrollment attempt observes the protected password file.
             Stop-AgentService -ServiceName $serviceName -ExecutablePath $executablePath
+            if (Test-Path -LiteralPath $clientKeyPath -PathType Leaf) {
+                Remove-Item -LiteralPath $clientKeyPath -Force
+            }
+            $preEnrollmentConfiguration = Get-LocalAgentConfigurationState `
+                -LiteralPath $configFilePath -ComputerName $env:COMPUTERNAME `
+                -ManagerAddress $managerAddress -ManagerPort $communicationPort `
+                -RegistrationAddress $registrationAddress `
+                -RegistrationPort $registrationPort
+            if (-not $preEnrollmentConfiguration.ManagerMatchesExpected -or
+                -not $preEnrollmentConfiguration.EnrollmentMatchesExpected) {
+                throw 'Wazuh configuration does not contain the expected identity immediately before enrollment.'
+            }
             $authPasswordPath = Write-EnrollmentPassword -InstallDirectory $installDirectory `
                 -Password $enrollmentPassword
         }
@@ -1419,6 +1693,19 @@ function Invoke-WazuhAgentDeployment {
             throw 'Agent service is installed, but client.keys is missing or invalid.'
         }
 
+        $finalConfigurationState = Get-LocalAgentConfigurationState `
+            -LiteralPath $configFilePath -ComputerName $env:COMPUTERNAME `
+            -ManagerAddress $managerAddress -ManagerPort $communicationPort `
+            -RegistrationAddress $registrationAddress `
+            -RegistrationPort $registrationPort
+        if (-not $finalConfigurationState.ManagerMatchesExpected) {
+            throw 'The final Wazuh manager configuration does not match the deployment manifest.'
+        }
+        if ($freshEnrollment -and
+            -not $finalConfigurationState.EnrollmentMatchesExpected) {
+            throw 'The final Wazuh enrollment identity does not match the computer name.'
+        }
+
         $finalService = Get-Service -Name $serviceName -ErrorAction Stop
         if ($finalService.Status -ne 'Running') {
             throw 'Wazuh service is not running after deployment.'
@@ -1428,6 +1715,8 @@ function Invoke-WazuhAgentDeployment {
                 operation = $operation
                 targetVersion = $targetVersion.ToString()
                 rebootRequired = $script:RebootRequired
+                computerRenameDetected = $computerRenameDetected
+                freshEnrollment = $freshEnrollment
             }
         $deploymentCompleted = $true
         return $script:ExitCodes.Success
