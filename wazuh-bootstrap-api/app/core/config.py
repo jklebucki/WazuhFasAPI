@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     wazuh_registration_address: str = Field(alias="WAZUH_REGISTRATION_ADDRESS", min_length=1)
     wazuh_registration_port: int = Field(1515, alias="WAZUH_REGISTRATION_PORT", ge=1, le=65535)
 
-    target_agent_version: str = Field("4.14.6", alias="TARGET_AGENT_VERSION")
+    target_agent_version: str = Field("4.14.7", alias="TARGET_AGENT_VERSION")
     target_agent_package_revision: str = Field(
         "1", alias="TARGET_AGENT_PACKAGE_REVISION", min_length=1
     )

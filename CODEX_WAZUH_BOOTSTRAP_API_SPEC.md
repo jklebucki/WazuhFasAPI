@@ -49,10 +49,10 @@ Domyślne wartości wdrożeniowe:
 ```text
 Wazuh Manager:                 192.168.21.15
 Wazuh Server API:              https://127.0.0.1:55000
-Docelowy klient Windows:       4.14.6
+Docelowy klient Windows:       4.14.7
 Rewizja pakietu MSI:           1
-Pakiet:                        wazuh-agent-4.14.6-1.msi
-Oficjalny URL MSI:             https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.6-1.msi
+Pakiet:                        wazuh-agent-4.14.7-1.msi
+Oficjalny URL MSI:             https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.7-1.msi
 Port komunikacji agentów:      1514/TCP
 Port enrollmentu:              1515/TCP
 Nazwa usługi Windows:          WazuhSvc
@@ -268,9 +268,9 @@ WAZUH_MANAGER_PORT=1514
 WAZUH_REGISTRATION_ADDRESS=192.168.21.15
 WAZUH_REGISTRATION_PORT=1515
 
-TARGET_AGENT_VERSION=4.14.6
+TARGET_AGENT_VERSION=4.14.7
 TARGET_AGENT_PACKAGE_REVISION=1
-TARGET_AGENT_MSI_URL=https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.6-1.msi
+TARGET_AGENT_MSI_URL=https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.7-1.msi
 TARGET_AGENT_SHA256=
 
 CLIENT_API_KEY=CHANGE_ME
@@ -550,11 +550,11 @@ Przykład:
 {
   "schemaVersion": 1,
   "targetAgent": {
-    "version": "4.14.6",
+    "version": "4.14.7",
     "packageRevision": "1",
-    "fullPackageVersion": "4.14.6-1",
-    "msiFileName": "wazuh-agent-4.14.6-1.msi",
-    "downloadUrl": "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.6-1.msi",
+    "fullPackageVersion": "4.14.7-1",
+    "msiFileName": "wazuh-agent-4.14.7-1.msi",
+    "downloadUrl": "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.7-1.msi",
     "sha256": null
   },
   "manager": {

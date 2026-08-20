@@ -59,7 +59,7 @@ def test_ready_success_and_failure(client: TestClient) -> None:
         return_value=httpx.Response(200, text=token(), headers={"content-type": "text/plain"})
     )
     manager = respx.get("https://wazuh.local:55000/manager/info").mock(
-        return_value=httpx.Response(200, json=wazuh_response([{"version": "Wazuh v4.14.6"}]))
+        return_value=httpx.Response(200, json=wazuh_response([{"version": "Wazuh v4.14.7"}]))
     )
     respx.get("https://wazuh.local:55000/agents").mock(
         return_value=httpx.Response(200, json=wazuh_response([]))
@@ -69,7 +69,7 @@ def test_ready_success_and_failure(client: TestClient) -> None:
     )
     response = client.get("/health/ready")
     assert response.status_code == 200
-    assert response.json()["managerVersion"] == "4.14.6"
+    assert response.json()["managerVersion"] == "4.14.7"
     client.app.state.data_service.readiness_cache.clear()
     manager.mock(return_value=httpx.Response(503))
     response = client.get("/health/ready")

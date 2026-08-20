@@ -20,7 +20,7 @@ os.environ.update(
         "WAZUH_REGISTRATION_ADDRESS": "192.168.21.15",
         "CLIENT_API_KEY": "client-" + "c" * 40,
         "ADMIN_API_KEY": "admin-" + "a" * 40,
-        "TARGET_AGENT_VERSION": "4.14.6",
+        "TARGET_AGENT_VERSION": "4.14.7",
         "TARGET_AGENT_MSI_URL": "",
     }
 )
@@ -66,7 +66,7 @@ def agent_raw() -> dict[str, object]:
         "group": ["ADMINISTRACJA"],
         "status": "disconnected",
         "status_code": 1,
-        "version": "Wazuh v4.14.6",
+        "version": "Wazuh v4.14.7",
         "ip": "192.168.29.20",
         "registerIP": "any",
         "lastKeepAlive": "2026-07-20T10:15:00Z",

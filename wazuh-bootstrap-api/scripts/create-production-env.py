@@ -50,11 +50,11 @@ def build_env(password: str, client_key: str, admin_key: str, sha256: str) -> st
         ("WAZUH_MANAGER_PORT", "1514"),
         ("WAZUH_REGISTRATION_ADDRESS", "192.168.21.15"),
         ("WAZUH_REGISTRATION_PORT", "1515"),
-        ("TARGET_AGENT_VERSION", "4.14.6"),
+        ("TARGET_AGENT_VERSION", "4.14.7"),
         ("TARGET_AGENT_PACKAGE_REVISION", "1"),
         (
             "TARGET_AGENT_MSI_URL",
-            "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.6-1.msi",
+            "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.7-1.msi",
         ),
         ("TARGET_AGENT_SHA256", sha256),
         ("CLIENT_API_KEY", client_key),

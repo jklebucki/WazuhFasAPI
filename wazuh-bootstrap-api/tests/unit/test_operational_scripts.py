@@ -48,9 +48,9 @@ def test_enrollment_check_never_prints_password_and_supports_safe_comparison() -
 
 
 def test_gpo_readiness_check_is_strict_and_never_prints_secrets() -> None:
-    checker = (
-        PROJECT_ROOT / "deploy" / "gpo" / "Test-WazuhGpoReadiness.ps1"
-    ).read_text(encoding="utf-8")
+    checker = (PROJECT_ROOT / "deploy" / "gpo" / "Test-WazuhGpoReadiness.ps1").read_text(
+        encoding="utf-8"
+    )
 
     assert "Get-SmbShareAccess" in checker
     assert "EncryptData" in checker
@@ -91,7 +91,7 @@ def test_validate_config_can_import_app_from_another_working_directory(tmp_path:
                 'WAZUH_REGISTRATION_PORT="1515"',
                 f'CLIENT_API_KEY="{"c" * 40}"',
                 f'ADMIN_API_KEY="{"a" * 40}"',
-                'TARGET_AGENT_VERSION="4.14.6"',
+                'TARGET_AGENT_VERSION="4.14.7"',
                 'TARGET_AGENT_MSI_URL=""',
                 'TARGET_AGENT_SHA256=""',
                 'MANAGER_CACHE_TTL_SECONDS="60"',

@@ -19,8 +19,8 @@ def test_manifest_explicit_version_generated_url(client: TestClient) -> None:
     response = client.get("/api/v1/manifest", headers={"X-API-Key": CLIENT_KEY})
     assert response.status_code == 200
     body = response.json()
-    assert body["targetAgent"]["version"] == "4.14.6"
-    assert body["targetAgent"]["downloadUrl"].endswith("wazuh-agent-4.14.6-1.msi")
+    assert body["targetAgent"]["version"] == "4.14.7"
+    assert body["targetAgent"]["downloadUrl"].endswith("wazuh-agent-4.14.7-1.msi")
     assert body["manager"]["compatible"] is True
     assert response.headers["cache-control"] == "private, max-age=30"
 
