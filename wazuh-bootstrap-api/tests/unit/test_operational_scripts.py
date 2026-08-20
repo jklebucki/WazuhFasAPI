@@ -47,6 +47,15 @@ def test_enrollment_check_never_prints_password_and_supports_safe_comparison() -
     assert 'cat "$password_file"' not in checker
 
 
+def test_wazuh_agent_hash_script_downloads_from_the_official_source() -> None:
+    script = (PROJECT_ROOT / "scripts" / "fetch-wazuh-agent-sha256.sh").read_text(encoding="utf-8")
+
+    assert "wazuh-agent-4.14.7-1.msi" in script
+    assert "curl --fail --location --proto '=https' --tlsv1.2" in script
+    assert 'sha256sum "$package_file"' in script
+    assert "TARGET_AGENT_SHA256=%s" in script
+
+
 def test_gpo_readiness_check_is_strict_and_never_prints_secrets() -> None:
     checker = (PROJECT_ROOT / "deploy" / "gpo" / "Test-WazuhGpoReadiness.ps1").read_text(
         encoding="utf-8"
