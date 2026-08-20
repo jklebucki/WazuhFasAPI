@@ -8,9 +8,9 @@ Idempotent Wazuh agent installation, repair, and upgrade for an AD computer star
 Uses the read-only Wazuh Bootstrap API as the source of the target version and manager
 configuration. It never retrieves or guesses client.keys. Enrollment is allowed when the
 manager has no record for the computer or when one unambiguous record satisfies the embedded
-stale-agent policy and the manager's authd force policy. A separately protected enrollment
-password file is required. Secrets are never written to this script, logs, or the msiexec
-command line. A local agent identity that does not match the current computer name triggers
+stale-agent policy and the manager's authd force policy. The Wazuh registration password is
+embedded in the deployment configuration and is passed to the MSI only for a fresh enrollment.
+A local agent identity that does not match the current computer name triggers
 a controlled full reinstall and re-enrollment without restoring the previous identity files.
 #>
 
@@ -23,10 +23,10 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.Net.Http
 
-# Deployment configuration. Keep secrets in the protected files referenced below.
+# Deployment configuration. The registration password is required by Wazuh agent 4.14.7.
 $script:BootstrapApiUrl = 'https://wazuh.ad.citronex.pl:8443'
 $script:ApiKeyFile = '\\fssrv.ad.citronex.pl\WazuhDeployment$\client-api-key.txt'
-$script:EnrollmentPasswordFile = '\\fssrv.ad.citronex.pl\WazuhDeployment$\enrollment-password.txt'
+$script:WazuhRegistrationPassword = '303328f10a729697b837cd5e69c013470d92f28bd48778be952dcf827097f538'
 $script:AllowedDownloadHosts = @('packages.wazuh.com')
 $script:AuditOnly = $false
 $script:ForceRepair = $false
@@ -131,7 +131,7 @@ function Get-GpoConfiguration {
     return [pscustomobject]@{
         BootstrapApiUrl = $script:BootstrapApiUrl
         ApiKeyFile = $script:ApiKeyFile
-        EnrollmentPasswordFile = $script:EnrollmentPasswordFile
+        WazuhRegistrationPassword = $script:WazuhRegistrationPassword
         AllowedDownloadHosts = @($script:AllowedDownloadHosts)
         AuditOnly = $script:AuditOnly
         ForceRepair = $script:ForceRepair
@@ -148,7 +148,7 @@ function ConvertTo-GpoConfiguration {
     [CmdletBinding()]
     param([Parameter(Mandatory)][psobject]$Configuration)
 
-    foreach ($name in @('BootstrapApiUrl', 'ApiKeyFile', 'AllowedDownloadHosts',
+    foreach ($name in @('BootstrapApiUrl', 'ApiKeyFile', 'WazuhRegistrationPassword', 'AllowedDownloadHosts',
             'AuditOnly', 'ForceRepair', 'ApiRetryCount', 'ApiRetryDelaySeconds',
             'EnrollmentTimeoutSeconds', 'AllowStaleAgentReenrollment',
             'StaleAgentReenrollmentMinutes', 'LogDirectory')) {
@@ -164,6 +164,9 @@ function ConvertTo-GpoConfiguration {
 
     if ([string]::IsNullOrWhiteSpace([string]$Configuration.ApiKeyFile)) {
         throw 'ApiKeyFile must not be empty.'
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$Configuration.WazuhRegistrationPassword)) {
+        throw 'WazuhRegistrationPassword must not be empty.'
     }
     if ([string]::IsNullOrWhiteSpace([string]$Configuration.LogDirectory)) {
         throw 'LogDirectory must not be empty.'
@@ -187,13 +190,7 @@ function ConvertTo-GpoConfiguration {
     return [pscustomobject]@{
         BootstrapApiUrl = $apiUri.AbsoluteUri.TrimEnd('/')
         ApiKeyFile = [string]$Configuration.ApiKeyFile
-        EnrollmentPasswordFile = if ($null -eq
-            $Configuration.PSObject.Properties['EnrollmentPasswordFile']) {
-            ''
-        }
-        else {
-            [string]$Configuration.EnrollmentPasswordFile
-        }
+        WazuhRegistrationPassword = [string]$Configuration.WazuhRegistrationPassword
         AllowedDownloadHosts = @($allowedHosts | ForEach-Object { ([string]$_).ToLowerInvariant() })
         AuditOnly = [bool]$Configuration.AuditOnly
         ForceRepair = [bool]$Configuration.ForceRepair
@@ -1237,28 +1234,6 @@ function Ensure-AgentService {
     }
 }
 
-function Write-EnrollmentPassword {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$InstallDirectory,
-        [Parameter(Mandatory)][string]$Password
-    )
-
-    $path = Join-Path $InstallDirectory 'authd.pass'
-    try {
-        [IO.File]::WriteAllText($path, $Password + [Environment]::NewLine, `
-            (New-Object Text.UTF8Encoding($false)))
-        Protect-LocalPath -LiteralPath $path
-        return $path
-    }
-    catch {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        }
-        throw
-    }
-}
-
 function Wait-ForEnrollment {
     [CmdletBinding()]
     param(
@@ -1505,21 +1480,10 @@ function Invoke-WazuhAgentDeployment {
 
     $enrollmentPassword = $null
     if ($freshEnrollment) {
-        if ([string]::IsNullOrWhiteSpace($configuration.EnrollmentPasswordFile)) {
-            throw (New-HttpException -Message `
-                'Fresh enrollment requires a separately protected enrollment password file.' `
-                -StatusCode 409)
-        }
-        $script:CurrentFailureExitCode = $script:ExitCodes.Configuration
-        $enrollmentPassword = Read-ProtectedValue `
-            -LiteralPath $configuration.EnrollmentPasswordFile `
-            -Description 'Wazuh enrollment password' -MinimumLength 1 `
-            -RetryCount $configuration.ApiRetryCount `
-            -RetryDelaySeconds $configuration.ApiRetryDelaySeconds
+        $enrollmentPassword = $configuration.WazuhRegistrationPassword
     }
 
     $workDirectory = $null
-    $authPasswordPath = $null
     $deploymentCompleted = $false
     try {
         if ($operation -ne 'None') {
@@ -1592,6 +1556,7 @@ function Invoke-WazuhAgentDeployment {
                     $registrationAddress
                 $properties['WAZUH_REGISTRATION_PORT'] = `
                     [string]$registrationPort
+                $properties['WAZUH_REGISTRATION_PASSWORD'] = $enrollmentPassword
                 $properties['WAZUH_AGENT_NAME'] = $env:COMPUTERNAME
             }
 
@@ -1662,8 +1627,8 @@ function Invoke-WazuhAgentDeployment {
         $executablePath = Join-Path $installDirectory $executableName
         $script:CurrentFailureExitCode = $script:ExitCodes.Agent
         if ($freshEnrollment) {
-            # MSI may start WazuhSvc immediately. Stop it before creating authd.pass so the
-            # intentional enrollment attempt observes the protected password file.
+            # MSI may start WazuhSvc immediately. Stop it before checking the enrollment
+            # that was configured through WAZUH_REGISTRATION_PASSWORD.
             Stop-AgentService -ServiceName $serviceName -ExecutablePath $executablePath
             if (Test-Path -LiteralPath $clientKeyPath -PathType Leaf) {
                 Remove-Item -LiteralPath $clientKeyPath -Force
@@ -1677,8 +1642,6 @@ function Invoke-WazuhAgentDeployment {
                 -not $preEnrollmentConfiguration.EnrollmentMatchesExpected) {
                 throw 'Wazuh configuration does not contain the expected identity immediately before enrollment.'
             }
-            $authPasswordPath = Write-EnrollmentPassword -InstallDirectory $installDirectory `
-                -Password $enrollmentPassword
         }
         $enrollmentPassword = $null
 
@@ -1723,9 +1686,6 @@ function Invoke-WazuhAgentDeployment {
     }
     finally {
         $enrollmentPassword = $null
-        if ($authPasswordPath -and (Test-Path -LiteralPath $authPasswordPath)) {
-            Remove-Item -LiteralPath $authPasswordPath -Force
-        }
         if ($workDirectory -and (Test-Path -LiteralPath $workDirectory)) {
             if ($deploymentCompleted) {
                 Remove-Item -LiteralPath $workDirectory -Recurse -Force

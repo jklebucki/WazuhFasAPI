@@ -10,18 +10,15 @@ Bootstrap API informuje, czy rekord nazwy komputera istnieje w managerze, ale ni
 że lokalny `client.keys` odpowiada temu rekordowi. API nie udostępnia kluczy i nie wykonuje
 enrollmentu. Skrypt GPO respektuje tę granicę i nigdy nie pobiera `client.keys` z managera.
 
-Skrypt korzysta z dwóch tajemnic przechowywanych poza kodem i SYSVOL:
+Skrypt odczytuje z chronionego udziału SMB tylko klucz API:
 
 - klucz `X-API-Key` tylko do odczytu manifestu i stanu własnej nazwy komputera;
-- hasło enrollmentu Wazuh, używane wyłącznie, gdy komputer nie ma klucza, a manager nie ma
-  rekordu tej nazwy albo ma dokładnie jeden rekord spełniający kontrolowaną politykę
-  re-enrollmentu.
 
-Pliki są odczytywane przez konto komputera z chronionego udziału SMB. Hasło enrollmentu nie
-jest przekazywane w argumentach `msiexec`; skrypt zapisuje je tymczasowo jako chroniony
-`authd.pass`, oczekuje na utworzenie prawidłowego `client.keys`, a następnie usuwa plik hasła.
-Aktywne uruchomienie usuwa również osierocony `authd.pass` pozostawiony przez awarię zasilania
-lub przerwanie poprzedniej próby; tryb `$script:AuditOnly = $true` nie modyfikuje plików.
+Hasło enrollmentu Wazuh jest osadzone w `$script:WazuhRegistrationPassword`. Gdy komputer nie
+ma poprawnego klucza, a manager zezwala na enrollment lub kontrolowany re-enrollment, skrypt
+przekazuje tę wartość instalatorowi jako `WAZUH_REGISTRATION_PASSWORD`. Wartość nie jest
+logowana. Aktywne uruchomienie usuwa również osierocony `authd.pass` pozostawiony przez
+wcześniejszą wersję skryptu; tryb `$script:AuditOnly = $true` nie modyfikuje plików.
 
 ## Macierz decyzji
 
@@ -35,7 +32,7 @@ lub przerwanie poprzedniej próby; tryb `$script:AuditOnly = $true` nie modyfiku
 | brak/poprawności klucza | jeden odpowiednio stary rekord `never_connected` | naprawa/instalacja i kontrolowany re-enrollment |
 | brak/poprawności klucza | rekord aktywny, świeży, z nieznanym statusem albo niewiarygodnymi datami | kod 30, ręczna rekonsyliacja; brak enrollmentu |
 | brak/poprawności klucza | duplikaty (`409`) | kod 30, ręczne usunięcie konfliktu |
-| brak/poprawności klucza | rekord nie istnieje | instalacja/naprawa i enrollment z chronionym hasłem |
+| brak/poprawności klucza | rekord nie istnieje | instalacja/naprawa i enrollment z hasłem rejestracyjnym MSI |
 | dane API oznaczone `stale=true` | dowolny | brak mutacji, błąd kontrolowany |
 | agent nowszy niż target | dowolny | brak downgrade'u; tylko kontrola usługi |
 
@@ -73,7 +70,8 @@ Po uszkodzeniu `ossec.conf` jego kopia diagnostyczna pozostaje wyłącznie w chr
 roboczym. Plik `client.keys` nigdy nie jest umieszczany w raporcie jawnym.
 
 Oficjalny instalator Wazuh obsługuje cichą instalację przez `msiexec /i ... /q`, zmienne
-`WAZUH_MANAGER`, `WAZUH_REGISTRATION_SERVER`, `WAZUH_REGISTRATION_PORT`, `WAZUH_AGENT_NAME`
+`WAZUH_MANAGER`, `WAZUH_REGISTRATION_SERVER`, `WAZUH_REGISTRATION_PORT`,
+`WAZUH_REGISTRATION_PASSWORD`, `WAZUH_AGENT_NAME`
 i inne opcje wdrożeniowe. Skrypt korzysta tylko z wartości zweryfikowanego manifestu. Zobacz
 [oficjalną instrukcję Windows](https://documentation.wazuh.com/current/installation-guide/wazuh-agent/wazuh-agent-package-windows.html)
 oraz [deployment variables](https://documentation.wazuh.com/current/user-manual/agent/agent-enrollment/deployment-variables/deployment-variables-windows.html).

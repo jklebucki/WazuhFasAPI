@@ -112,10 +112,10 @@ Ponowne uruchomienie po przerwanym MSI naprawia częściową instalację; pusty 
 `disconnected` albo `never_connected` może przejść kontrolowany re-enrollment egzekwowany
 ostatecznie przez politykę `wazuh-authd`; aktywne, świeże i niejednoznaczne rekordy są blokowane.
 
-Nietajna konfiguracja jest osadzona na początku skryptu; tajemnice są odczytywane z osobnego,
-chronionego udziału dostępnego dla kont komputerów i nigdy nie trafiają do SYSVOL. Przed
-aktywacją użyj [Test-WazuhGpoReadiness.ps1](deploy/gpo/Test-WazuhGpoReadiness.ps1), który
-kontroluje udział, ACL, poświadczenia FastAPI i hasło enrollmentu Wazuh.
+Konfiguracja, w tym wymagane przez Wazuh 4.14.7 hasło rejestracyjne, jest osadzona na początku
+skryptu. Hasło jest przekazywane do MSI tylko podczas świeżego enrollmentu. Przed aktywacją użyj
+[Test-WazuhGpoReadiness.ps1](deploy/gpo/Test-WazuhGpoReadiness.ps1), który kontroluje udział,
+ACL, poświadczenia FastAPI i konfigurację enrollmentu Wazuh.
 
 Procedura pilota, podpisania PowerShell, konfiguracji GPMC, ACL udziału i aktywacji znajduje się
 w [instrukcji wdrożenia GPO](docs/GPO-DEPLOYMENT.md). Kontrolowaną macierz awarii i procedurę

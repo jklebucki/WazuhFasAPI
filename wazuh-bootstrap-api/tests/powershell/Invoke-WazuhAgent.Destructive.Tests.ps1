@@ -309,7 +309,7 @@ function New-TestConfiguration {
     $configuration = [ordered]@{
         BootstrapApiUrl = 'https://wazuh.ad.citronex.pl:8443'
         ApiKeyFile = $ApiKeyFile
-        EnrollmentPasswordFile = ''
+        WazuhRegistrationPassword = 'test-registration-password'
         AllowedDownloadHosts = @('packages.wazuh.com')
         AuditOnly = $AuditOnly
         ForceRepair = $ForceRepair

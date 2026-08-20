@@ -266,10 +266,11 @@ Describe 'Install-WazuhAgent configuration' {
 }
 
 Describe 'Install-WazuhAgent static secret safety' {
-    It 'does not pass the enrollment password as an MSI property' {
+    It 'passes the embedded registration password to the MSI for a fresh enrollment' {
         $source = Get-Content -LiteralPath $scriptPath -Raw
-        $source | Should Not Match "properties\['WAZUH_REGISTRATION_PASSWORD'\]"
-        $source | Should Match 'Write-EnrollmentPassword'
+        $source | Should Match "properties\['WAZUH_REGISTRATION_PASSWORD'\]"
+        $source | Should Match '\$script:WazuhRegistrationPassword'
+        $source | Should Not Match 'Write-EnrollmentPassword'
     }
 
     It 'does not bypass TLS, signatures, or PowerShell policy' {
